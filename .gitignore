@@ -1,0 +1,21 @@
+# Local application data and container mount directories.
+/data/
+/config/
+/media/
+/imports/
+secret.key
+state.json
+state-before-*.json
+
+# Local builds, backups, screenshots, and partial downloads.
+/work/
+/outputs/
+/*.exe
+/yingku
+*.part
+*.log
+
+# Commit the template only; keep real environment values local.
+.env
+.env.*
+!.env.example

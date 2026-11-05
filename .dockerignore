@@ -1,0 +1,9 @@
+# Only source required for a release build enters the build context.
+**
+!go.mod
+!go.sum
+!*.go
+*_test.go
+!web/
+!web/**
+!THIRD_PARTY_NOTICES.md

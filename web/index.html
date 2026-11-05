@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="映库，把网盘目录、下载和私人影视库放在一起。">
+  <title>映库 · 私人影视库</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/cinema.css">
+  <link rel="stylesheet" href="/player.css">
+  <link rel="stylesheet" href="/tasks.css">
+  <link rel="stylesheet" href="/scan-matching.css">
+  <link rel="stylesheet" href="/cloud-auth.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="nav-caption">媒体管理</div>
+      <nav id="nav" aria-label="主导航"></nav>
+      <div class="sidebar-rule"></div>
+      <div class="nav-caption source-caption"><span>已连接来源</span><button class="icon-btn" id="sidebar-add" title="添加来源" aria-label="添加来源">+</button></div>
+      <div id="sidebar-sources"></div>
+      <div class="sidebar-bottom"><span class="status-dot"></span><span>映库服务<small>你的文件，由你掌管</small></span><span class="version">v0.1</span></div>
+    </aside>
+    <div class="workspace">
+      <header class="topbar"><div class="breadcrumb" id="top-label">我的空间 <span>/</span> 媒体库</div><nav id="cinema-nav" aria-label="影视导航"></nav><div class="top-right"><div id="cinema-tools"></div><span id="connection-status" class="connected"><span class="status-dot"></span>服务已连接</span><span class="avatar">我</span></div></header>
+      <main id="main" tabindex="-1"><div class="loading-screen">正在打开你的映库…</div></main>
+      <footer class="footer"><span>映库 · 把收藏留给自己</span><span>私人媒体库 / 独立运行</span></footer>
+    </div>
+  </div>
+  <div id="modal-root"></div>
+  <div id="toast-root" aria-live="polite"></div>
+</body>
+</html>
