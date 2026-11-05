@@ -2,8 +2,12 @@
 **
 !go.mod
 !go.sum
-!*.go
-*_test.go
+!cmd/
+!cmd/**
+!internal/
+!internal/**
 !web/
 !web/**
+**/*_test.go
+!LICENSE
 !THIRD_PARTY_NOTICES.md

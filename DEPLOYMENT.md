@@ -4,7 +4,7 @@
 
 ## 提交到 Git 的文件
 
-提交 Go 源码和测试、`go.mod`、`go.sum`、`web/`、`Dockerfile`、`.dockerignore`、`.gitignore`、`THIRD_PARTY_NOTICES.md`、部署文档和不含真实凭据的 `.env.example`。如果保留 Compose 部署方式，也提交 `compose.yaml`。
+提交 `cmd/`、`internal/`、`web/`、`go.mod`、`go.sum`、`Dockerfile`、`.dockerignore`、`.gitignore`、`LICENSE`、`THIRD_PARTY_NOTICES.md`、部署文档和不含真实凭据的 `.env.example`。如果保留 Compose 部署方式，也提交 `compose.yaml`。
 
 `data/`、运行时的 `config/`、`media/`、`imports/`、真实 `.env`、`work/`、`outputs/` 和本地编译的可执行文件留在 Git 之外。`state.json` 保存媒体库、路径、进度和加密后的来源凭据，`secret.key` 用来解密这些凭据；连同迁移备份一起私下保存。`.gitignore` 不会停止跟踪已经提交的文件，可先用 `git ls-files -- data work outputs .env` 检查实际用于部署的仓库。
 

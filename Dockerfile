@@ -2,16 +2,17 @@ FROM golang:1.26-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
-COPY *.go ./
+COPY cmd ./cmd
+COPY internal ./internal
 COPY web ./web
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/yingku .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/yingku ./cmd/yingku
 
 FROM alpine:3.23
 RUN apk add --no-cache ca-certificates tzdata \
     && mkdir -p /config /media
 WORKDIR /app
 COPY --from=build /out/yingku /app/yingku
-COPY THIRD_PARTY_NOTICES.md /app/THIRD_PARTY_NOTICES.md
+COPY LICENSE THIRD_PARTY_NOTICES.md /app/
 ENV YINGKU_ADDR=0.0.0.0:8787 \
     YINGKU_DATA_DIR=/config \
     YINGKU_MEDIA_DIR=/media \
