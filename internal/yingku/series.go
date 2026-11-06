@@ -3,6 +3,7 @@ package yingku
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -303,6 +304,21 @@ func mergeSeriesValues(dst *Item, src Item) {
 	}
 	dst.Episodes = mergeEpisodes(dst.Episodes, src.Episodes)
 	dst.Details = mergeDetails(dst.Details, src.Details)
+	if len(src.SkipSeasons) > 0 {
+		seasons := make(map[int]SeasonSkipSegments, len(dst.SkipSeasons)+len(src.SkipSeasons))
+		maps.Copy(seasons, dst.SkipSeasons)
+		for number, incoming := range src.SkipSeasons {
+			marks := seasons[number]
+			if marks.Intro == nil {
+				marks.Intro = incoming.Intro
+			}
+			if marks.OutroFromEnd == nil {
+				marks.OutroFromEnd = incoming.OutroFromEnd
+			}
+			seasons[number] = marks
+		}
+		dst.SkipSeasons = seasons
+	}
 	for _, field := range src.LocalFields {
 		lockLocal(dst, field, true)
 	}

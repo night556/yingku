@@ -141,7 +141,7 @@ export function mountPlayerControls({root,video,signal,icon,onSeek,getNextEpisod
   }
   listen(root,'click',event=>{
     const button=event.target.closest('[data-player-action]');
-    if(!button){if(!event.target.closest('#player-settings'))closeMenu();return;}
+    if(!button){if(!event.target.closest('#player-settings,#player-seek'))closeMenu();return;}
     event.preventDefault();
     const action=button.dataset.playerAction;
     if(action==='play')void togglePlay();
@@ -212,4 +212,5 @@ export function mountPlayerControls({root,video,signal,icon,onSeek,getNextEpisod
   rate.value=String(preferences.rate);video.playbackRate=preferences.rate;
   try{video.volume=preferences.volume;}catch{}video.muted=preferences.muted;
   updatePlay();updateVolume();updateBrightness();updateClock();updateSubtitles();updateFullscreen();
+  return {canAutoSkip:()=>menu.hidden&&!seeking&&!dragging&&!gestures.active()&&!root.closest('[inert]')};
 }

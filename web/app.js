@@ -5,6 +5,7 @@ import {createCaster} from './casting.js';
 import {mountNetworkPanel} from './network.js';
 import {createCinema,readMediaRoute,itemLink,libraryLink,episodeNeighbors,fileUnavailable,castResumeTarget} from './cinema.js';
 import {mountPlayerControls} from './player.js';
+import {mountSkipSegments,skipEditorMarkup} from './player-skip.js';
 import {createTaskPage} from './tasks.js';
 const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => [...root.querySelectorAll(s)];
@@ -483,6 +484,7 @@ function playFile(id,reuseVideo=null,{autoplay=true,resumePosition=null}={}) {
   const f = state.files.find(f => f.id === id), it = state.items.find(it => it.id === f?.itemId); if (!f || !it) return;
   if(f.status!=='completed')return toast('视频尚未入库完成，请先查看下载任务',true);
   if(fileUnavailable(f)){showFileRecovery(id);return;}
+  const canShareMarkers = it.type === 'tv' && f.season > 0 && f.episode > 0 && !(f.episodeEnd > f.episode);
   const hasResume = f.position > 5 && (!f.duration || f.position < f.duration - 15);
   let resumeAt=resumePosition!==null?resumePosition:hasResume?f.position:0,claimPending=null,preserveRequested=false;
   const originalQuality=f.videoWidth>0&&f.videoHeight>0?`原画 · ${f.videoWidth} × ${f.videoHeight}`:'原画 · 读取分辨率中…';
@@ -490,6 +492,7 @@ function playFile(id,reuseVideo=null,{autoplay=true,resumePosition=null}={}) {
     <video id="player-video" playsinline preload="metadata" src="/api/files/${id}/stream">${f.subtitles.map((s, i) => `<track kind="subtitles" src="/api/files/${id}/subtitles/${i}" label="${esc(s.name)}" srclang="zh" ${i === 0 ? 'default' : ''}>`).join('')}</video>
     <div class="player-buffering" id="player-buffering" role="status" hidden><span class="spinner"></span>正在缓冲…</div><div class="player-notice" id="player-notice" role="status"></div><div class="player-error" id="player-error" role="alert"></div>
     <div class="player-gesture" id="player-gesture" aria-live="off" hidden><strong id="player-gesture-title"></strong><span id="player-gesture-detail"></span></div>
+    <button class="button player-skip" type="button" hidden></button>
     ${it.type==='tv'?'<section class="player-auto-next-panel" id="player-auto-next-panel" aria-label="自动播放下一集" hidden><strong id="player-next-title">即将播放下一集</strong><p id="player-next-description"></p><p id="player-next-countdown" aria-live="polite"></p><div><button class="button primary" data-player-action="next-now">立即播放</button><button class="button quiet" data-player-action="cancel-next">取消连播</button></div></section>':''}
     <div class="player-controls" aria-label="播放控制">
       <input class="player-seek" id="player-seek" type="range" min="0" max="1" step="0.1" value="0" aria-label="播放进度" disabled>
@@ -504,11 +507,13 @@ function playFile(id,reuseVideo=null,{autoplay=true,resumePosition=null}={}) {
         <button class="player-control" data-player-action="fullscreen" aria-label="进入全屏" title="进入全屏">${icon('fullscreen')}</button>
       </div></div>
       <div class="player-settings" id="player-settings" hidden>
-        ${it.type==='tv'?'<label class="player-auto-next-option"><input id="player-auto-next" type="checkbox" checked><span>看完自动播放下一集</span></label>':''}
+        ${it.type==='tv'?'<label class="player-checkbox"><input id="player-auto-next" type="checkbox" checked><span>看完自动播放下一集</span></label>':''}
+        <label class="player-checkbox" title="此浏览器的所有视频共用"><input id="player-auto-skip" type="checkbox"><span>自动跳过片头片尾</span></label>
         <label>画面亮度<span class="player-brightness-control"><input id="player-brightness" aria-label="画面亮度" type="range" min="20" max="150" step="1" value="100"><output id="player-brightness-value" for="player-brightness">100%</output></span></label>
         <label>播放速度<select id="player-rate" aria-label="播放速度">${[0.5,0.75,1,1.25,1.5,2].map(rate=>`<option value="${rate}" ${rate===1?'selected':''}>${rate===1?'正常速度':rate+'×'}</option>`).join('')}</select></label>
         <label>字幕<select id="player-subtitles" aria-label="字幕"><option value="-1">关闭字幕</option>${f.subtitles.map((subtitle,index)=>`<option value="${index}" ${index===0?'selected':''}>${esc(subtitle.name)}</option>`).join('')}</select></label>
         <button class="button quiet" data-action="upload-subtitle" data-id="${esc(id)}">${icon('subtitle')}添加字幕</button>
+        ${skipEditorMarkup(canShareMarkers)}
         <p class="player-keyboard-help">← 快退 5 秒 · → 短按快进 5 秒、长按临时 2×<br>↑ / ↓ 音量 ±5% · 空格 播放 / 暂停</p>
       </div>
     </div>
@@ -574,7 +579,37 @@ function playFile(id,reuseVideo=null,{autoplay=true,resumePosition=null}={}) {
   video.addEventListener('pause', () => saveProgress(video, id), options);
   video.addEventListener('ended', () => { saveProgress(video, id); releaseActivity(); }, options);
   video.addEventListener('error', () => { if(!f.videoWidth||!f.videoHeight){const quality=$('#player-quality');if(quality)quality.textContent='原画 · 分辨率未知';} $('#player-error').innerHTML = `<div class="error-box">视频暂时无法播放。文件可能无法读取，或浏览器不支持此格式。<button class="button small" data-action="recover-file" data-id="${esc(id)}">检查文件与位置</button></div>`;void api(`/files/${id}/availability?refresh=1`).catch(()=>{}); }, options);
-  mountPlayerControls({root:$('.cinema-player'),video,signal:playerAbort.signal,icon,beforePlay:()=>claimPlayback(),onSeek:()=>{void claimPlayback(true).then(()=>saveProgress(video,id)).catch(error=>toast(error.message,true));},getNextEpisode:()=>episodeNeighbors(state,id)?.next,onNextEpisode:stepEpisode});
+  const root = $('.cinema-player');
+  const onSeek = () => {
+    void claimPlayback(true).then(() => {
+      saveProgress(video, id);
+      if (video.ended) releaseActivity();
+    }).catch(error => { if (!playerSignal.aborted) toast(error.message, true); });
+  };
+  const {canAutoSkip} = mountPlayerControls({root,video,signal:playerSignal,icon,beforePlay:()=>claimPlayback(),onSeek,getNextEpisode:()=>episodeNeighbors(state,id)?.next,onNextEpisode:stepEpisode});
+  mountSkipSegments({root, video, signal: playerSignal, segments: f, canAutoSkip, onSeek,
+    seasonSegments: canShareMarkers ? it.skipSeasons?.[f.season] || {} : null,
+    saveSegment: async (kind, scope, input) => {
+      const endpoint = `/files/${id}/skip-segments/${kind}${scope === 'season' ? '?scope=season' : ''}`;
+      const result = input ? await api(endpoint, input) : await api(endpoint, undefined, 'DELETE');
+      if (scope === 'season') {
+        const latestFile = state.files.find(file => file.id === id);
+        const series = state.items.find(item => item.id === (latestFile?.itemId || it.id));
+        if (series) {
+          const seasons = series.skipSeasons ||= {};
+          const marks = seasons[f.season] ||= {};
+          marks[kind === 'intro' ? 'intro' : 'outroFromEnd'] = result.segment;
+        }
+      } else {
+        const latest = state.files.find(file => file.id === id);
+        if (latest) {
+          latest[kind] = result.segment;
+          latest[`${kind}SkipDisabled`] = result.disabled;
+        }
+      }
+      return result;
+    },
+  });
   if(autoplay)claimPlayback().then(()=>{if(!playerSignal.aborted)return video.play();}).catch(error=>{if(playerSignal.aborted)return;const notice=$('#player-notice');if(notice)notice.textContent=error.message||'视频已就绪，点击播放继续。';});
 }
 function uploadSubtitle(id) {

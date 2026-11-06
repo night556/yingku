@@ -100,6 +100,8 @@ type Item struct {
 	Created          string          `json:"created"`
 	Details          MetadataDetails `json:"details"`
 	LocalFields      []string        `json:"localFields,omitempty"`
+
+	SkipSeasons map[int]SeasonSkipSegments `json:"skipSeasons,omitempty"`
 }
 type Subtitle struct {
 	Name string `json:"name"`
@@ -128,6 +130,11 @@ type MediaFile struct {
 	VideoHeight    int               `json:"videoHeight,omitempty"`
 	Subtitles      []Subtitle        `json:"subtitles"`
 	Created        string            `json:"created"`
+
+	Intro             *SkipSegment `json:"intro,omitempty"`
+	Outro             *SkipSegment `json:"outro,omitempty"`
+	IntroSkipDisabled bool         `json:"introSkipDisabled,omitempty"`
+	OutroSkipDisabled bool         `json:"outroSkipDisabled,omitempty"`
 }
 
 // Subtitle paths must survive restarts but are never sent by the public state API.

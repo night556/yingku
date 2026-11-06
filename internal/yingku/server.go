@@ -44,6 +44,7 @@ func (a *App) handler() http.Handler {
 	a.networkRoutes(mux)
 	a.dlnaRoutes(mux)
 	a.playbackRoutes(mux)
+	a.skipSegmentRoutes(mux)
 	a.sourceMoveRoutes(mux)
 	a.fileAvailabilityRoutes(mux)
 	a.libraryRemovalRoutes(mux)
@@ -337,7 +338,7 @@ func (a *App) handler() http.Handler {
 			http.Error(w, "Method not allowed", 405)
 			return
 		}
-		if r.URL.Path != "/source-migration.js" && r.URL.Path != "/scan-manual.js" && r.URL.Path != "/player-keyboard.js" && r.URL.Path != "/tasks.js" && r.URL.Path != "/tasks.css" && r.URL.Path != "/" && r.URL.Path != "/cinema.js" && r.URL.Path != "/cinema.css" && r.URL.Path != "/player.js" && r.URL.Path != "/player-gestures.js" && r.URL.Path != "/player.css" && r.URL.Path != "/cloud-auth.js" && r.URL.Path != "/cloud-auth.css" && r.URL.Path != "/app.js" && r.URL.Path != "/scan-matching.js" && r.URL.Path != "/scan-matching.css" && r.URL.Path != "/scan.js" && r.URL.Path != "/casting.js" && r.URL.Path != "/network.js" && r.URL.Path != "/login.js" && r.URL.Path != "/style.css" && r.URL.Path != "/favicon.svg" {
+		if r.URL.Path != "/source-migration.js" && r.URL.Path != "/scan-manual.js" && r.URL.Path != "/player-skip.js" && r.URL.Path != "/player-keyboard.js" && r.URL.Path != "/tasks.js" && r.URL.Path != "/tasks.css" && r.URL.Path != "/" && r.URL.Path != "/cinema.js" && r.URL.Path != "/cinema.css" && r.URL.Path != "/player.js" && r.URL.Path != "/player-gestures.js" && r.URL.Path != "/player.css" && r.URL.Path != "/cloud-auth.js" && r.URL.Path != "/cloud-auth.css" && r.URL.Path != "/app.js" && r.URL.Path != "/scan-matching.js" && r.URL.Path != "/scan-matching.css" && r.URL.Path != "/scan.js" && r.URL.Path != "/casting.js" && r.URL.Path != "/network.js" && r.URL.Path != "/login.js" && r.URL.Path != "/style.css" && r.URL.Path != "/favicon.svg" {
 			http.NotFound(w, r)
 			return
 		}
