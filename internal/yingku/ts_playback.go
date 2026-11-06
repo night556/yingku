@@ -1,6 +1,7 @@
 package yingku
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -32,11 +33,15 @@ type tsPlaybackCache struct {
 }
 
 type tsPlaybackJob struct {
-	key    string
-	done   chan struct{}
-	cancel context.CancelFunc
-	idle   *time.Timer
-	err    error
+	key       string
+	done      chan struct{}
+	cancel    context.CancelFunc
+	idle      *time.Timer
+	err       error
+	started   time.Time
+	stage     string
+	duration  float64
+	processed float64
 }
 
 type tsPlaybackSource struct {
@@ -97,7 +102,7 @@ func (a *App) tsPlaybackStatus(w http.ResponseWriter, r *http.Request) {
 	job := cache.job
 	if job != nil && job.key == source.key && job.cancel != nil {
 		job.idle.Reset(tsJobIdle)
-		jsonResponse(w, http.StatusAccepted, map[string]string{"status": "preparing"})
+		job.writeProgress(w)
 		return
 	}
 	if r.Method == http.MethodGet {
@@ -119,15 +124,24 @@ func (a *App) tsPlaybackStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), tsJobLimit)
-	job = &tsPlaybackJob{key: source.key, done: make(chan struct{}), cancel: cancel, idle: time.AfterFunc(tsJobIdle, cancel)}
+	job = &tsPlaybackJob{key: source.key, done: make(chan struct{}), cancel: cancel,
+		idle: time.AfterFunc(tsJobIdle, cancel), started: time.Now(), stage: "probing"}
 	cache.job = job
 	go a.buildTSPlayback(ctx, job, source, path, ffmpeg, ffprobe, release)
 	release = nil // The job holds the media read until FFmpeg has exited.
-	jsonResponse(w, http.StatusAccepted, map[string]string{"status": "preparing"})
+	job.writeProgress(w)
+}
+
+// The caller holds the cache mutex while taking a snapshot of the job.
+func (job *tsPlaybackJob) writeProgress(w http.ResponseWriter) {
+	jsonResponse(w, http.StatusAccepted, map[string]any{
+		"status": "preparing", "stage": job.stage, "processed": job.processed,
+		"duration": job.duration, "elapsed": time.Since(job.started).Seconds(),
+	})
 }
 
 func (a *App) buildTSPlayback(ctx context.Context, job *tsPlaybackJob, source tsPlaybackSource, path, ffmpeg, ffprobe string, release func()) {
-	err := a.remuxTS(ctx, source, path, ffmpeg, ffprobe)
+	err := a.remuxTS(ctx, job, source, path, ffmpeg, ffprobe)
 	if ctx.Err() != nil && err != nil {
 		err = errors.New("TS 播放准备已取消或超时，请重新打开视频")
 	}
@@ -157,10 +171,10 @@ func (a *App) stopTSPlayback() {
 	}
 }
 
-func (a *App) remuxTS(ctx context.Context, source tsPlaybackSource, path, ffmpeg, ffprobe string) error {
+func (a *App) remuxTS(ctx context.Context, job *tsPlaybackJob, source tsPlaybackSource, path, ffmpeg, ffprobe string) error {
 	// Force local MPEG-TS input so even a mislabeled file cannot load a playlist or URL.
 	input := []string{"-protocol_whitelist", "file", "-f", "mpegts", "-i", source.path}
-	probe := append([]string{"-v", "error", "-show_entries", "stream=index,codec_name,codec_type", "-of", "json"}, input...)
+	probe := append([]string{"-v", "error", "-show_entries", "stream=index,codec_name,codec_type:format=duration", "-of", "json"}, input...)
 	result, err := exec.CommandContext(ctx, ffprobe, probe...).Output()
 	if err != nil {
 		return errors.New("无法分析 TS 文件，请检查文件是否完整")
@@ -171,6 +185,9 @@ func (a *App) remuxTS(ctx context.Context, source tsPlaybackSource, path, ffmpeg
 			Codec string `json:"codec_name"`
 			Type  string `json:"codec_type"`
 		} `json:"streams"`
+		Format struct {
+			Duration string `json:"duration"`
+		} `json:"format"`
 	}
 	if err := json.Unmarshal(result, &media); err != nil {
 		return errors.New("无法识别 TS 文件的音视频编码")
@@ -203,15 +220,25 @@ func (a *App) remuxTS(ctx context.Context, source tsPlaybackSource, path, ffmpeg
 		return errors.New("无法清理 TS 播放临时文件")
 	}
 	defer os.Remove(partial)
-	args := append([]string{"-nostdin", "-v", "error", "-n"}, input...)
+	args := append([]string{"-nostdin", "-v", "error", "-n", "-nostats", "-stats_period", "0.5", "-progress", "pipe:1"}, input...)
 	args = append(args, "-map", fmt.Sprintf("0:%d", video))
 	if audio >= 0 {
 		args = append(args, "-map", fmt.Sprintf("0:%d", audio))
 	}
 	args = append(args, "-c", "copy", "-movflags", "+faststart", "-fs", strconv.FormatInt(limit, 10), "-f", "mp4", partial)
-	if err := exec.CommandContext(ctx, ffmpeg, args...).Run(); err != nil {
+	duration, _ := strconv.ParseFloat(media.Format.Duration, 64)
+	a.tsPlayback.mu.Lock()
+	job.stage = "remuxing"
+	if duration > 0 && duration <= 1e8 {
+		job.duration = duration
+	}
+	a.tsPlayback.mu.Unlock()
+	if err := a.runTSRemux(exec.CommandContext(ctx, ffmpeg, args...), job); err != nil {
 		return errors.New("TS 换封装失败，请检查文件完整性和服务器磁盘空间")
 	}
+	a.tsPlayback.mu.Lock()
+	job.stage = "finalizing"
+	a.tsPlayback.mu.Unlock()
 	output, err := os.Stat(partial)
 	if err != nil || output.Size() == 0 || output.Size() >= limit {
 		return errors.New("TS 播放缓存生成失败，文件可能超过缓存容量")
@@ -225,6 +252,36 @@ func (a *App) remuxTS(ctx context.Context, source tsPlaybackSource, path, ffmpeg
 		return errors.New("无法保存 TS 播放缓存，请检查数据目录")
 	}
 	return nil
+}
+
+func (a *App) runTSRemux(cmd *exec.Cmd, job *tsPlaybackJob) error {
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		value, ok := strings.CutPrefix(scanner.Text(), "out_time_us=")
+		if !ok {
+			continue
+		}
+		micros, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || micros < 0 {
+			continue
+		}
+		a.tsPlayback.mu.Lock()
+		job.processed = max(job.processed, float64(micros)/1e6)
+		a.tsPlayback.mu.Unlock()
+	}
+	if err := scanner.Err(); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return err
+	}
+	return cmd.Wait()
 }
 
 func (a *App) reserveTSCache(required int64) error {

@@ -51,6 +51,10 @@ body[data-page="cast"] .sidebar,body[data-page="cast"] .footer{display:none}body
 .player-auto-next-panel>div{display:flex;gap:9px;margin-top:16px}.player-auto-next-panel .button{font-size:12px;padding:9px 12px}
 .player-buffering{position:absolute;z-index:3;top:50%;left:50%;transform:translate(-50%,-50%);display:flex;align-items:center;gap:10px;font-size:13px;color:#ddd;pointer-events:none}
 .player-buffering[hidden]{display:none}
+.player-prepare{display:grid;gap:8px;width:min(320px,calc(100% - 36px));padding:15px 18px;border:1px solid #ffffff25;border-radius:10px;background:#171b24f2}
+.player-prepare-stage{display:flex;align-items:center;gap:10px;color:#eff1f6}
+.player-prepare progress{width:100%;height:7px;accent-color:var(--accent)}
+.player-prepare small{color:#adb9cb;font-size:12px;font-variant-numeric:tabular-nums}
 .player-notice{position:absolute;z-index:9;top:110px;left:50%;transform:translateX(-50%);padding:10px 17px;background:#171a22ed;border-radius:7px;color:#fff;font-size:13px;max-width:80%;text-align:center}
 .player-notice:empty{display:none}
 .player-error{position:absolute;z-index:4;top:50%;left:50%;transform:translate(-50%,-50%);width:min(480px,85%);font-size:13px;line-height:1.9}

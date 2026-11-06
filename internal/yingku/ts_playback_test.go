@@ -43,24 +43,31 @@ func TestTSCompatibilityPlayback(t *testing.T) {
 	}
 	server := httptest.NewServer(a.handler())
 	defer server.Close()
-	waitForPreparation := func() {
+	waitForPreparation := func() *tsPlaybackJob {
 		t.Helper()
 		a.tsPlayback.mu.Lock()
-		done := a.tsPlayback.job.done
+		job := a.tsPlayback.job
 		a.tsPlayback.mu.Unlock()
 		select {
-		case <-done:
+		case <-job.done:
 		case <-time.After(20 * time.Second):
 			t.Fatal("TS preparation did not finish")
 		}
+		return job
 	}
 	const endpoint = "/api/files/compatible/ts-playback"
 	original, err := os.ReadFile(a.s.Files[0].Destination)
 	if err != nil {
 		t.Fatal(err)
 	}
-	request(t, server, a, "POST", endpoint, nil, http.StatusAccepted)
-	waitForPreparation()
+	started := request(t, server, a, "POST", endpoint, nil, http.StatusAccepted)
+	if string(started["stage"]) != `"probing"` || string(started["processed"]) != "0" || len(started["elapsed"]) == 0 {
+		t.Fatalf("expected initial analysis progress, got %+v", started)
+	}
+	job := waitForPreparation()
+	if job.stage != "finalizing" || job.duration < 1.5 || job.processed < 1.5 {
+		t.Fatalf("expected real FFmpeg progress for the two-second sample, got stage %s, %.3f / %.3f", job.stage, job.processed, job.duration)
+	}
 	ready := request(t, server, a, "GET", endpoint, nil, http.StatusOK)
 	var key string
 	if err := json.Unmarshal(ready["key"], &key); err != nil || len(key) != 64 {

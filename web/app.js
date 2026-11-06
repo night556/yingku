@@ -4,7 +4,7 @@ import {createScanner,aiSettingsPanel} from './scan.js';
 import {createCaster} from './casting.js';
 import {mountNetworkPanel} from './network.js';
 import {createCinema,readMediaRoute,itemLink,libraryLink,episodeNeighbors,fileUnavailable,castResumeTarget} from './cinema.js';
-import {mountPlayerControls} from './player.js';
+import {mountPlayerControls,playbackTime} from './player.js';
 import {mountSkipSegments,skipEditorMarkup} from './player-skip.js';
 import {createTaskPage} from './tasks.js';
 const $ = (s, root = document) => root.querySelector(s);
@@ -492,7 +492,11 @@ function playFile(id,reuseVideo=null,{autoplay=true,resumePosition=null}={}) {
   modal(esc(it.title), `${it.type === 'tv' ? `第 ${f.season} 季 · 第 ${f.episode} 集 · ` : ''}${esc(f.name)}`, `<div class="player-stage" tabindex="0" aria-label="视频播放区域">
     <video id="player-video" playsinline preload="metadata" src="/api/files/${id}/stream">${f.subtitles.map((s, i) => `<track kind="subtitles" src="/api/files/${id}/subtitles/${i}" label="${esc(s.name)}" srclang="zh" ${i === 0 ? 'default' : ''}>`).join('')}</video>
     <div class="player-buffering" id="player-buffering" role="status" hidden><span class="spinner"></span>正在缓冲…</div><div class="player-notice" id="player-notice" role="status"></div><div class="player-error" id="player-error" role="alert"></div>
-    ${isTS ? '<div class="player-buffering" id="player-prepare" role="status" hidden><span class="spinner"></span>正在准备 TS 兼容播放…</div>' : ''}
+    ${isTS ? `<div class="player-buffering player-prepare" id="player-prepare" hidden>
+      <div class="player-prepare-stage" role="status"><span class="spinner" aria-hidden="true"></span><span data-ts-stage></span></div>
+      <progress max="100" aria-label="TS 兼容播放准备进度"></progress>
+      <small data-ts-progress></small>
+    </div>` : ''}
     <div class="player-gesture" id="player-gesture" aria-live="off" hidden><strong id="player-gesture-title"></strong><span id="player-gesture-detail"></span></div>
     <button class="button player-skip" type="button" hidden></button>
     ${it.type==='tv'?'<section class="player-auto-next-panel" id="player-auto-next-panel" aria-label="自动播放下一集" hidden><strong id="player-next-title">即将播放下一集</strong><p id="player-next-description"></p><p id="player-next-countdown" aria-live="polite"></p><div><button class="button primary" data-player-action="next-now">立即播放</button><button class="button quiet" data-player-action="cancel-next">取消连播</button></div></section>':''}
@@ -590,10 +594,27 @@ function playFile(id,reuseVideo=null,{autoplay=true,resumePosition=null}={}) {
     if (!f.videoWidth || !f.videoHeight) $('#player-quality').textContent = '原画 · 分辨率未知';
     $('#player-error').innerHTML = `<div class="error-box">${esc(message)}<button class="button small" data-action="recover-file" data-id="${esc(id)}">检查文件与位置</button></div>`;
   }
+  function updateTSProgress({stage, processed = 0, duration = 0, elapsed = 0} = {}) {
+    const label = $('[data-ts-stage]', prepareIndicator);
+    const progress = $('progress', prepareIndicator);
+    const detail = $('[data-ts-progress]', prepareIndicator);
+    const text = {probing: '正在分析 TS 文件…', remuxing: '正在换封装…', finalizing: '正在保存播放缓存…'}[stage] || '正在准备 TS 兼容播放…';
+    if (label.textContent !== text) label.textContent = text;
+    const wait = `已等待 ${playbackTime(elapsed)}`;
+    if (duration > 0) {
+      const percent = Math.min(99, Math.floor(processed / duration * 100));
+      progress.value = percent;
+      detail.textContent = `${percent}% · ${playbackTime(Math.min(processed, duration))} / ${playbackTime(duration)} · ${wait}`;
+    } else {
+      progress.removeAttribute('value');
+      detail.textContent = processed > 0 ? `已处理 ${playbackTime(processed)} · ${wait}` : wait;
+    }
+  }
   async function prepareTSPlayback() {
     if (compatibility === 'preparing' || playerSignal.aborted) return;
     if (video.currentTime > 0) resumeAt = video.currentTime;
     compatibility = 'preparing';
+    updateTSProgress();
     prepareIndicator.hidden = false;
     $('#player-error').textContent = '';
     $('#player-notice').textContent = '';
@@ -601,6 +622,7 @@ function playFile(id,reuseVideo=null,{autoplay=true,resumePosition=null}={}) {
     try {
       let result = await api(endpoint, undefined, 'POST', playerSignal);
       while (result.status === 'preparing') {
+        updateTSProgress(result);
         await new Promise(resolve => setTimeout(resolve, 1200));
         if (playerSignal.aborted) return;
         result = await api(endpoint, undefined, 'GET', playerSignal);
