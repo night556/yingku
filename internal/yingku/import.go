@@ -152,16 +152,17 @@ type PreviewRow struct {
 	Duplicate   bool   `json:"duplicate"`
 }
 type Preview struct {
-	Mode      string       `json:"mode"`
-	Rows      []PreviewRow `json:"rows"`
-	Root      string       `json:"root"`
-	ItemID    string       `json:"itemId"`
-	Total     int64        `json:"total"`
-	Count     int          `json:"count"`
-	ItemTitle string       `json:"itemTitle"`
-	ItemYear  string       `json:"itemYear"`
-	request   ImportRequest
-	lookup    ImportRequest
+	Mode           string       `json:"mode"`
+	Rows           []PreviewRow `json:"rows"`
+	Root           string       `json:"root"`
+	ItemID         string       `json:"itemId"`
+	Total          int64        `json:"total"`
+	Count          int          `json:"count"`
+	ItemTitle      string       `json:"itemTitle"`
+	ItemYear       string       `json:"itemYear"`
+	request        ImportRequest
+	lookup         ImportRequest
+	sourceIdentity string
 }
 
 func (a *App) preview(ctx context.Context, r ImportRequest) (Preview, error) {
@@ -198,6 +199,7 @@ func (a *App) preview(ctx context.Context, r ImportRequest) (Preview, error) {
 	if err != nil {
 		return p, err
 	}
+	p.sourceIdentity = scanSourceIdentity(s)
 	if s.Type == "local" {
 		p.Mode = r.Mode
 		if p.Mode == "" {
@@ -413,6 +415,9 @@ func (a *App) importMedia(ctx context.Context, r ImportRequest) (map[string]any,
 	source, err := a.source(r.SourceID)
 	if err != nil {
 		return nil, err
+	}
+	if scanSourceIdentity(source) != p.sourceIdentity {
+		return nil, errors.New("来源已修改，请重新预览")
 	}
 	var localInfo *localMetadata
 	if source.Type == "local" {

@@ -1,4 +1,5 @@
 import {createSourceLogin} from './cloud-auth.js';
+import {createSourceMigration} from './source-migration.js';
 import {createScanner,aiSettingsPanel} from './scan.js';
 import {createCaster} from './casting.js';
 import {mountNetworkPanel} from './network.js';
@@ -55,6 +56,7 @@ function rememberLibrary(){try{sessionStorage.setItem('yingku_library_return',li
 let libraryFilter=initialRoute.filter||'all',libraryQuery=initialRoute.query||'',librarySort=initialRoute.sort||'added';
 let sourceID = '', sourcePath = '/', entries = [], selected = new Set(), sourceError = '', sourceBusy = false, browseSerial = 0;
 let draft = null, preview = null, previewDirty = false, searchResults = [], sourceEditing = null, matchItemID = '';
+let sourceMigration = null;
 let modalReturn = null, detailSeason = null, detailItemID = '', playerFileID = '', progressAt = 0;
 let libraryRemoval = null;
 let episodeSwitchBusy=false;
@@ -211,6 +213,9 @@ function sourceModal(id = '') {
   const s = sourceEditing || { type: 'local', name: '', root: '', url: '', username: '', clientId: '' };
   modal(sourceEditing ? '编辑来源' : '连接一个来源', '连接后即可浏览目录，来源中的文件会保留。', `<form id="source-form"><label class="field"><span>来源类型</span><select name="type" id="source-type" ${sourceEditing ? 'disabled' : ''}>${[['baidu', '百度网盘'], ['quark', '夸克网盘'], ['webdav', 'WebDAV'], ['local', '本地目录']].map(([v, n]) => `<option value="${v}" ${s.type === v ? 'selected' : ''}>${n}</option>`).join('')}</select></label><label class="field"><span>来源名称</span><input name="name" required maxlength="80" value="${esc(s.name)}" placeholder="例如：我的百度网盘"></label><div id="source-fields"></div><div id="source-form-error"></div></form>`, `<small>保存前会测试目录是否可读取</small><div class="button-row">${sourceEditing ? `<button class="button small danger" data-action="remove-source" data-id="${id}">移除</button>` : ''}<button class="button primary" type="submit" form="source-form">${icon('check')}保存并连接</button></div>`);
   renderSourceFields(s.type, s);
+  sourceMigration = sourceEditing?.type === 'local' ? createSourceMigration({
+    form: $('#source-form'), button: $('button[form="source-form"]'), source: s, api, esc,
+  }) : null;
 }
 function renderSourceFields(type, s = {}) {
   sourceLogin?.pause();
@@ -515,14 +520,39 @@ function playFile(id,reuseVideo=null,{autoplay=true,resumePosition=null}={}) {
   playerFileID = id; progressAt = 0; const video = $('#player-video'); playerAbort = new AbortController(); const options = { signal: playerAbort.signal };
   delete video.dataset.progressToken;
   const playerSignal=playerAbort.signal;
+  let activityToken = '';
+  const activityURL = `/api/files/${id}/playback/activity`;
+  function releaseActivity(token = activityToken) {
+    if (!token) return;
+    if (token === activityToken) activityToken = '';
+    fetch(activityURL, {
+      method: 'POST', keepalive: true,
+      headers: {'Content-Type': 'application/json', 'X-App-Token': state?.csrf || ''},
+      body: JSON.stringify({token, ended: true}),
+    }).catch(() => {});
+  }
+  const activityTimer = setInterval(() => {
+    if (!video.isConnected) releaseActivity();
+    else if (activityToken) api(`/files/${id}/playback/activity`, {token: activityToken}).catch(() => {});
+  }, 15000);
+  playerSignal.addEventListener('abort', () => {
+    clearInterval(activityTimer);
+    releaseActivity();
+  }, {once: true});
+  window.addEventListener('pagehide', () => releaseActivity(), options);
+  window.addEventListener('pageshow', event => {
+    if (event.persisted && video.isConnected && !video.paused) claimPlayback(true).catch(() => {});
+  }, options);
   function applyResume(){if(video.readyState>=1&&Number.isFinite(resumeAt))video.currentTime=Math.max(0,Math.min(resumeAt,Number.isFinite(video.duration)?video.duration:resumeAt));}
   async function claimPlayback(preservePosition=false){
     if(preservePosition)preserveRequested=true;
     if(claimPending)return claimPending;
     const previousToken=video.dataset.progressToken||'';
     claimPending=(async()=>{
-      const result=await api(`/files/${id}/playback`,{token:previousToken});
-      if(playerSignal.aborted||$('#player-video')!==video)throw new Error('播放器已关闭');
+      const result=await api(`/files/${id}/playback`,{token:previousToken,trackActivity:true});
+      if(playerSignal.aborted||$('#player-video')!==video){releaseActivity(result.activityToken);throw new Error('播放器已关闭');}
+      releaseActivity();
+      activityToken = result.activityToken || '';
       const keepPosition=preserveRequested||resumePosition!==null&&!previousToken||previousToken&&previousToken===result.token;
       resumeAt=keepPosition?video.currentTime:result.position>5&&(!result.duration||result.position<result.duration-15)?result.position:resumePosition!==null?result.position:0;
       if(!keepPosition)applyResume();video.dataset.progressToken=result.token;
@@ -542,7 +572,7 @@ function playFile(id,reuseVideo=null,{autoplay=true,resumePosition=null}={}) {
   video.addEventListener('resize',updateVideoInfo,options);
   video.addEventListener('timeupdate', () => { if (Date.now() - progressAt > 5000) { progressAt = Date.now(); saveProgress(video, id); } }, options);
   video.addEventListener('pause', () => saveProgress(video, id), options);
-  video.addEventListener('ended', () => saveProgress(video, id), options);
+  video.addEventListener('ended', () => { saveProgress(video, id); releaseActivity(); }, options);
   video.addEventListener('error', () => { if(!f.videoWidth||!f.videoHeight){const quality=$('#player-quality');if(quality)quality.textContent='原画 · 分辨率未知';} $('#player-error').innerHTML = `<div class="error-box">视频暂时无法播放。文件可能无法读取，或浏览器不支持此格式。<button class="button small" data-action="recover-file" data-id="${esc(id)}">检查文件与位置</button></div>`;void api(`/files/${id}/availability?refresh=1`).catch(()=>{}); }, options);
   mountPlayerControls({root:$('.cinema-player'),video,signal:playerAbort.signal,icon,beforePlay:()=>claimPlayback(),onSeek:()=>{void claimPlayback(true).then(()=>saveProgress(video,id)).catch(error=>toast(error.message,true));},getNextEpisode:()=>episodeNeighbors(state,id)?.next,onNextEpisode:stepEpisode});
   if(autoplay)claimPlayback().then(()=>{if(!playerSignal.aborted)return video.play();}).catch(error=>{if(playerSignal.aborted)return;const notice=$('#player-notice');if(notice)notice.textContent=error.message||'视频已就绪，点击播放继续。';});
@@ -630,7 +660,34 @@ document.addEventListener('submit', async event => {
   const f = event.target; event.preventDefault();
   const button = $(`button[form="${f.id}"]`) || $('button[type=submit]', f);
   if (f.id === 'settings-form') await busy(button, async () => { const data = new FormData(f); await api('/config', { mediaRoot: data.get('mediaRoot'), concurrency: Number(data.get('concurrency')), tmdbToken: data.get('tmdbToken'), clearTmdb: data.has('clearTmdb'), exportNfo: data.has('exportNfo'), autoMetadata: data.has('autoMetadata'), ai:{enabled:data.has('aiEnabled'),endpoint:data.get('aiEndpoint'),model:data.get('aiModel'),key:data.get('aiKey'),clearKey:data.has('aiClearKey')} }); await refresh(true); toast('设置已保存'); });
-  else if (f.id === 'source-form') { if(!sourceLogin.beforeSave())return;await busy(button, async () => { $('#source-form-error').innerHTML = ''; const data = Object.fromEntries(new FormData(f)); data.type = sourceEditing?.type || data.type; if (sourceEditing) data.id = sourceEditing.id; try { const result = await api('/sources', data); closeModal(); sourceID = result.id; sourcePath = '/'; entries = []; selected.clear(); await refresh(); page = 'sources'; location.hash = 'sources'; renderPage(); loadDirectory('/'); toast('来源已连接'); } catch (e) { $('#source-form-error').innerHTML = `<div class="error-box">${esc(e.message)}</div>`; } }); }
+  else if (f.id === 'source-form') {
+    if (!sourceLogin.beforeSave()) return;
+    await busy(button, async () => {
+      const errorBox = $('#source-form-error', f);
+      errorBox.innerHTML = '';
+      const data = Object.fromEntries(new FormData(f));
+      data.type = sourceEditing?.type || data.type;
+      if (sourceEditing) data.id = sourceEditing.id;
+      try {
+        const migrating = sourceMigration?.rootChanged();
+        const result = migrating ? await sourceMigration.submit(data) : await api('/sources', data);
+        if (!result || !f.isConnected) return;
+        closeModal();
+        sourceID = result.id;
+        sourcePath = '/';
+        entries = [];
+        selected.clear();
+        await refresh();
+        page = 'sources';
+        location.hash = 'sources';
+        renderPage();
+        loadDirectory('/');
+        toast(migrating ? `来源已更新，已重新定位 ${result.count} 个视频` : '来源已连接');
+      } catch (error) {
+        errorBox.innerHTML = `<div class="error-box">${esc(error.message)}</div>`;
+      }
+    });
+  }
   else if (f.id === 'import-config') { await busy(button, async () => { try { await getPreview(); } catch (e) { $('#import-error').innerHTML = `<div class="error-box">${esc(e.message)}</div>`; } }); }
   else if (f.id === 'match-form') await busy(button, async () => { const it = state.items.find(it => it.id === matchItemID), q = new FormData(f).get('query'); const root = $('#item-matches'); root.innerHTML = '<p class="section-note"><span class="spinner"></span> 正在搜索…</p>'; try { const result = await api(`/metadata/search?type=${it.type}&query=${encodeURIComponent(q)}`); searchResults = result.results; root.innerHTML = matchList('choose-item-match'); } catch (e) { root.innerHTML = `<div class="error-box">${esc(e.message)}</div>`; } });
 });

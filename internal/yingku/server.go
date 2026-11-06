@@ -44,6 +44,7 @@ func (a *App) handler() http.Handler {
 	a.networkRoutes(mux)
 	a.dlnaRoutes(mux)
 	a.playbackRoutes(mux)
+	a.sourceMoveRoutes(mux)
 	a.fileAvailabilityRoutes(mux)
 	a.libraryRemovalRoutes(mux)
 	a.taskBatchRoutes(mux)
@@ -265,11 +266,12 @@ func (a *App) handler() http.Handler {
 		fail(w, errors.New("找不到视频文件"))
 	})
 	mux.HandleFunc("GET /api/files/{id}/stream", func(w http.ResponseWriter, r *http.Request) {
-		f, err := a.file(r.PathValue("id"))
+		f, endRead, err := a.beginMediaRead(r.PathValue("id"))
 		if err != nil {
 			http.Error(w, "找不到文件", 404)
 			return
 		}
+		defer endRead()
 		if f.Status != "completed" {
 			http.Error(w, "下载尚未完成", 409)
 			return
@@ -335,7 +337,7 @@ func (a *App) handler() http.Handler {
 			http.Error(w, "Method not allowed", 405)
 			return
 		}
-		if r.URL.Path != "/scan-manual.js" && r.URL.Path != "/player-keyboard.js" && r.URL.Path != "/tasks.js" && r.URL.Path != "/tasks.css" && r.URL.Path != "/" && r.URL.Path != "/cinema.js" && r.URL.Path != "/cinema.css" && r.URL.Path != "/player.js" && r.URL.Path != "/player-gestures.js" && r.URL.Path != "/player.css" && r.URL.Path != "/cloud-auth.js" && r.URL.Path != "/cloud-auth.css" && r.URL.Path != "/app.js" && r.URL.Path != "/scan-matching.js" && r.URL.Path != "/scan-matching.css" && r.URL.Path != "/scan.js" && r.URL.Path != "/casting.js" && r.URL.Path != "/network.js" && r.URL.Path != "/login.js" && r.URL.Path != "/style.css" && r.URL.Path != "/favicon.svg" {
+		if r.URL.Path != "/source-migration.js" && r.URL.Path != "/scan-manual.js" && r.URL.Path != "/player-keyboard.js" && r.URL.Path != "/tasks.js" && r.URL.Path != "/tasks.css" && r.URL.Path != "/" && r.URL.Path != "/cinema.js" && r.URL.Path != "/cinema.css" && r.URL.Path != "/player.js" && r.URL.Path != "/player-gestures.js" && r.URL.Path != "/player.css" && r.URL.Path != "/cloud-auth.js" && r.URL.Path != "/cloud-auth.css" && r.URL.Path != "/app.js" && r.URL.Path != "/scan-matching.js" && r.URL.Path != "/scan-matching.css" && r.URL.Path != "/scan.js" && r.URL.Path != "/casting.js" && r.URL.Path != "/network.js" && r.URL.Path != "/login.js" && r.URL.Path != "/style.css" && r.URL.Path != "/favicon.svg" {
 			http.NotFound(w, r)
 			return
 		}
@@ -614,6 +616,17 @@ func (a *App) sourceHandler(w http.ResponseWriter, r *http.Request) {
 	found := false
 	for i := range a.s.Sources {
 		if a.s.Sources[i].ID == s.ID {
+			if s.Type == "local" && pathKey(a.s.Sources[i].Root) != pathKey(s.Root) {
+				refs := localReferenceFiles(a.s.Files, s.ID)
+				if len(refs) != 0 {
+					fail(w, errors.New("此来源已有入库视频，请先预览并确认目录迁移"))
+					return
+				}
+				if blocked := a.sourceMoveBlockedLocked(s.ID, nil); blocked != "" {
+					fail(w, errors.New(blocked))
+					return
+				}
+			}
 			a.s.Sources[i] = s
 			found = true
 			break

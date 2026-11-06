@@ -893,8 +893,13 @@ func (a *App) castMedia(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	a.mu.Unlock()
-	f, err := a.file(fileID)
-	if err != nil || f.Status != "completed" {
+	f, endRead, err := a.beginMediaRead(fileID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer endRead()
+	if f.Status != "completed" {
 		http.NotFound(w, r)
 		return
 	}

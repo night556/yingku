@@ -187,6 +187,10 @@ type App struct {
 	fileDeleteWarnings []string
 	fileHealth         map[string]fileHealthEntry
 	fileHealthBusy     bool
+	sourceMoveMu       sync.Mutex
+	sourceMoves        map[string]*sourceMovePlan
+	webPlayback        map[string]webPlaybackActivity
+	streamReaders      map[string]int
 }
 
 func uid() string {
