@@ -198,6 +198,7 @@ type App struct {
 	sourceMoves        map[string]*sourceMovePlan
 	webPlayback        map[string]webPlaybackActivity
 	streamReaders      map[string]int
+	tsPlayback         tsPlaybackCache
 }
 
 func uid() string {

@@ -70,6 +70,7 @@ func Run() {
 			stop()
 		}
 		app.mu.Unlock()
+		app.stopTSPlayback()
 		shutdown, c := context.WithTimeout(context.Background(), 10*time.Second)
 		defer c()
 		_ = server.Shutdown(shutdown)

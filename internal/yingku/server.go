@@ -44,6 +44,7 @@ func (a *App) handler() http.Handler {
 	a.networkRoutes(mux)
 	a.dlnaRoutes(mux)
 	a.playbackRoutes(mux)
+	a.tsPlaybackRoutes(mux)
 	a.skipSegmentRoutes(mux)
 	a.sourceMoveRoutes(mux)
 	a.fileAvailabilityRoutes(mux)

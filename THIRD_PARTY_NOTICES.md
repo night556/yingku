@@ -25,3 +25,7 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+
+## FFmpeg
+
+The Docker image installs FFmpeg and ffprobe as separate command-line tools from Alpine Linux for TS playback. The Alpine package is distributed under GPL-2.0-or-later and LGPL-2.1-or-later. See the [Alpine package and source information](https://pkgs.alpinelinux.org/package/v3.23/community/x86_64/ffmpeg) and [FFmpeg source releases](https://ffmpeg.org/download.html#releases).

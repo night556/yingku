@@ -78,12 +78,12 @@ function metaBadge(s) { return badge(metaLabels[s] || s, s === 'ready' ? 'green'
 function art(path, wide = false) { return `/api/art?path=${encodeURIComponent(path)}${wide ? '&wide=1' : ''}`; }
 function toast(message, error = false) { const el = document.createElement('div'); el.className = `toast${error ? ' error' : ''}`; el.textContent = message; $('#toast-root').append(el); setTimeout(() => el.remove(), error ? 6500 : 3800); }
 function notifyFileDeleteWarning(message){const warning=document.createElement('div');warning.className='toast error deletion-warning';warning.setAttribute('role','alert');warning.innerHTML=`<span>${esc(message)}</span><button class="button small" type="button">知道了</button>`;warning.querySelector('button').addEventListener('click',()=>warning.remove());$('#toast-root').append(warning);}
-async function api(path, data, method = data === undefined ? 'GET' : 'POST') {
-  const options = { method, headers: {} };
+async function api(path, data, method = data === undefined ? 'GET' : 'POST', signal) {
+  const options = { method, headers: {}, signal };
   if (method !== 'GET') options.headers['X-App-Token'] = state?.csrf || '';
   if (data !== undefined) { options.headers['Content-Type'] = 'application/json'; options.body = JSON.stringify(data); }
   let response;
-  try { response = await fetch(`/api${path}`, options); } catch { throw new Error('无法连接映库服务，请确认映库仍在运行'); }
+  try { response = await fetch(`/api${path}`, options); } catch (error) { if(signal?.aborted)throw error;throw new Error('无法连接映库服务，请确认映库仍在运行'); }
   const result = await response.json().catch(() => ({}));
   if(response.status===401){location.assign('/login');throw new Error('请重新输入访问密码');}
   if (!response.ok) throw new Error(result.error || `请求失败（${response.status}）`);
@@ -484,6 +484,7 @@ function playFile(id,reuseVideo=null,{autoplay=true,resumePosition=null}={}) {
   const f = state.files.find(f => f.id === id), it = state.items.find(it => it.id === f?.itemId); if (!f || !it) return;
   if(f.status!=='completed')return toast('视频尚未入库完成，请先查看下载任务',true);
   if(fileUnavailable(f)){showFileRecovery(id);return;}
+  const isTS = /\.ts$/i.test(f.destination);
   const canShareMarkers = it.type === 'tv' && f.season > 0 && f.episode > 0 && !(f.episodeEnd > f.episode);
   const hasResume = f.position > 5 && (!f.duration || f.position < f.duration - 15);
   let resumeAt=resumePosition!==null?resumePosition:hasResume?f.position:0,claimPending=null,preserveRequested=false;
@@ -491,6 +492,7 @@ function playFile(id,reuseVideo=null,{autoplay=true,resumePosition=null}={}) {
   modal(esc(it.title), `${it.type === 'tv' ? `第 ${f.season} 季 · 第 ${f.episode} 集 · ` : ''}${esc(f.name)}`, `<div class="player-stage" tabindex="0" aria-label="视频播放区域">
     <video id="player-video" playsinline preload="metadata" src="/api/files/${id}/stream">${f.subtitles.map((s, i) => `<track kind="subtitles" src="/api/files/${id}/subtitles/${i}" label="${esc(s.name)}" srclang="zh" ${i === 0 ? 'default' : ''}>`).join('')}</video>
     <div class="player-buffering" id="player-buffering" role="status" hidden><span class="spinner"></span>正在缓冲…</div><div class="player-notice" id="player-notice" role="status"></div><div class="player-error" id="player-error" role="alert"></div>
+    ${isTS ? '<div class="player-buffering" id="player-prepare" role="status" hidden><span class="spinner"></span>正在准备 TS 兼容播放…</div>' : ''}
     <div class="player-gesture" id="player-gesture" aria-live="off" hidden><strong id="player-gesture-title"></strong><span id="player-gesture-detail"></span></div>
     <button class="button player-skip" type="button" hidden></button>
     ${it.type==='tv'?'<section class="player-auto-next-panel" id="player-auto-next-panel" aria-label="自动播放下一集" hidden><strong id="player-next-title">即将播放下一集</strong><p id="player-next-description"></p><p id="player-next-countdown" aria-live="polite"></p><div><button class="button primary" data-player-action="next-now">立即播放</button><button class="button quiet" data-player-action="cancel-next">取消连播</button></div></section>':''}
@@ -525,6 +527,9 @@ function playFile(id,reuseVideo=null,{autoplay=true,resumePosition=null}={}) {
   playerFileID = id; progressAt = 0; const video = $('#player-video'); playerAbort = new AbortController(); const options = { signal: playerAbort.signal };
   delete video.dataset.progressToken;
   const playerSignal=playerAbort.signal;
+  const root = $('.cinema-player');
+  const prepareIndicator = $('#player-prepare');
+  let compatibility = '', wantPlay = autoplay;
   let activityToken = '';
   const activityURL = `/api/files/${id}/playback/activity`;
   function releaseActivity(token = activityToken) {
@@ -576,17 +581,78 @@ function playFile(id,reuseVideo=null,{autoplay=true,resumePosition=null}={}) {
   video.addEventListener('loadedmetadata', () => { updateVideoInfo();applyResume(); }, options);
   video.addEventListener('resize',updateVideoInfo,options);
   video.addEventListener('timeupdate', () => { if (Date.now() - progressAt > 5000) { progressAt = Date.now(); saveProgress(video, id); } }, options);
-  video.addEventListener('pause', () => saveProgress(video, id), options);
+  video.addEventListener('pause', () => {
+    if (!video.error && compatibility !== 'preparing') wantPlay = false;
+    saveProgress(video, id);
+  }, options);
   video.addEventListener('ended', () => { saveProgress(video, id); releaseActivity(); }, options);
-  video.addEventListener('error', () => { if(!f.videoWidth||!f.videoHeight){const quality=$('#player-quality');if(quality)quality.textContent='原画 · 分辨率未知';} $('#player-error').innerHTML = `<div class="error-box">视频暂时无法播放。文件可能无法读取，或浏览器不支持此格式。<button class="button small" data-action="recover-file" data-id="${esc(id)}">检查文件与位置</button></div>`;void api(`/files/${id}/availability?refresh=1`).catch(()=>{}); }, options);
-  const root = $('.cinema-player');
+  function showPlaybackError(message) {
+    if (!f.videoWidth || !f.videoHeight) $('#player-quality').textContent = '原画 · 分辨率未知';
+    $('#player-error').innerHTML = `<div class="error-box">${esc(message)}<button class="button small" data-action="recover-file" data-id="${esc(id)}">检查文件与位置</button></div>`;
+  }
+  async function prepareTSPlayback() {
+    if (compatibility === 'preparing' || playerSignal.aborted) return;
+    if (video.currentTime > 0) resumeAt = video.currentTime;
+    compatibility = 'preparing';
+    prepareIndicator.hidden = false;
+    $('#player-error').textContent = '';
+    $('#player-notice').textContent = '';
+    const endpoint = `/files/${id}/ts-playback`;
+    try {
+      let result = await api(endpoint, undefined, 'POST', playerSignal);
+      while (result.status === 'preparing') {
+        await new Promise(resolve => setTimeout(resolve, 1200));
+        if (playerSignal.aborted) return;
+        result = await api(endpoint, undefined, 'GET', playerSignal);
+      }
+      if (result.status !== 'ready' || !result.key) throw new Error('无法取得 TS 播放缓存');
+      if (wantPlay && !video.dataset.progressToken && !root.closest('[inert]')) await claimPlayback();
+      if (playerSignal.aborted) return;
+      compatibility = 'ready';
+      $('#player-quality').title = 'TS 兼容播放，仅更换封装';
+      video.src = `/api${endpoint}/${encodeURIComponent(result.key)}`;
+    } catch (error) {
+      compatibility = 'failed';
+      if (!playerSignal.aborted) showPlaybackError(error.message || 'TS 兼容播放准备失败');
+    } finally {
+      prepareIndicator.hidden = true;
+    }
+    if (compatibility === 'ready' && wantPlay && !playerSignal.aborted && !root.closest('[inert]')) {
+      await video.play().catch(error => {
+        if (!playerSignal.aborted && !video.error) $('#player-notice').textContent = error.name === 'NotAllowedError' ? '兼容视频已就绪，点击播放。' : '兼容视频暂时无法播放，请重试。';
+      });
+    }
+  }
+  async function requestPlay() {
+    wantPlay = true;
+    if (compatibility === 'preparing') return;
+    if (compatibility === 'failed') return prepareTSPlayback();
+    await claimPlayback();
+    if (playerSignal.aborted || compatibility === 'preparing') return;
+    const source = video.src;
+    try { await video.play(); }
+    catch (error) {
+      if (playerSignal.aborted || source !== video.src || compatibility === 'preparing') return;
+      if (isTS && !compatibility && error.name === 'NotSupportedError') return prepareTSPlayback();
+      if (!video.error) throw error;
+    }
+  }
+  video.addEventListener('error', () => {
+    if (compatibility === 'preparing' || compatibility === 'failed') return;
+    const code = video.error?.code;
+    if (isTS && !compatibility && (code === 3 || code === 4)) { void prepareTSPlayback();return; }
+    showPlaybackError(compatibility === 'ready'
+      ? 'TS 已换封装，浏览器仍无法播放。请重新打开视频或检查音视频编码。'
+      : '视频暂时无法播放。文件可能无法读取，或浏览器不支持此格式。');
+    void api(`/files/${id}/availability?refresh=1`).catch(()=>{});
+  }, options);
   const onSeek = () => {
     void claimPlayback(true).then(() => {
       saveProgress(video, id);
       if (video.ended) releaseActivity();
     }).catch(error => { if (!playerSignal.aborted) toast(error.message, true); });
   };
-  const {canAutoSkip} = mountPlayerControls({root,video,signal:playerSignal,icon,beforePlay:()=>claimPlayback(),onSeek,getNextEpisode:()=>episodeNeighbors(state,id)?.next,onNextEpisode:stepEpisode});
+  const {canAutoSkip} = mountPlayerControls({root,video,signal:playerSignal,icon,requestPlay,onSeek,getNextEpisode:()=>episodeNeighbors(state,id)?.next,onNextEpisode:stepEpisode});
   mountSkipSegments({root, video, signal: playerSignal, segments: f, canAutoSkip, onSeek,
     seasonSegments: canShareMarkers ? it.skipSeasons?.[f.season] || {} : null,
     saveSegment: async (kind, scope, input) => {
@@ -610,7 +676,7 @@ function playFile(id,reuseVideo=null,{autoplay=true,resumePosition=null}={}) {
       return result;
     },
   });
-  if(autoplay)claimPlayback().then(()=>{if(!playerSignal.aborted)return video.play();}).catch(error=>{if(playerSignal.aborted)return;const notice=$('#player-notice');if(notice)notice.textContent=error.message||'视频已就绪，点击播放继续。';});
+  if(autoplay)requestPlay().catch(error=>{if(!playerSignal.aborted)$('#player-notice').textContent=error.message||'视频已就绪，点击播放继续。';});
 }
 function uploadSubtitle(id) {
   const input = document.createElement('input'); input.type = 'file'; input.accept = '.srt,.vtt';

@@ -21,7 +21,7 @@ export function playbackTime(value) {
   return (hours?hours+':'+String(minutes).padStart(2,'0'):String(minutes))+':'+String(remainder).padStart(2,'0');
 }
 
-export function mountPlayerControls({root,video,signal,icon,onSeek,getNextEpisode,onNextEpisode,beforePlay=async()=>{}}) {
+export function mountPlayerControls({root,video,signal,icon,onSeek,getNextEpisode,onNextEpisode,requestPlay=()=>video.play()}) {
   const $=selector=>root.querySelector(selector);
   const stage=$('.player-stage'),seek=$('#player-seek'),volume=$('#player-volume');
   const play=$('[data-player-action="play"]'),mute=$('[data-player-action="mute"]'),fullscreen=$('[data-player-action="fullscreen"]');
@@ -97,7 +97,7 @@ export function mountPlayerControls({root,video,signal,icon,onSeek,getNextEpisod
     waiting=value;$('#player-buffering').hidden=!value;showControls();
   }
   async function togglePlay() {
-    if(video.paused||video.ended){try{await beforePlay();if(!signal.aborted)await video.play();}catch(error){announce(error.message||'暂时无法播放，请重试或检查视频格式。');}}
+    if(video.paused||video.ended){try{await requestPlay();}catch(error){if(!signal.aborted)announce(error.message||'暂时无法播放，请重试或检查视频格式。');}}
     else video.pause();
   }
   async function toggleFullscreen() {
