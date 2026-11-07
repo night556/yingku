@@ -329,6 +329,46 @@ func TestCastQueueAPIAndStartDisabled(t *testing.T) {
 	}
 }
 
+func TestCastReplacementStopsStrictTVAndPlaysSelectedEpisode(t *testing.T) {
+	a, _, tv, device := castSeriesFixture(t, true)
+	first := queueStart(t, a, tv, device)
+	tv.mu.Lock()
+	oldURI, oldNext := tv.URI, tv.NextURI
+	tv.RequireStop = true
+	firstAction := len(tv.Actions)
+	tv.mu.Unlock()
+
+	second, err := a.startCast(context.Background(), device.ID, "cast-2", nil)
+	if err != nil || second.FileID != "cast-2" || second.Status != "PLAYING" || second.ID == first.ID {
+		t.Fatalf("expected the selected episode to replace the first cast: %+v (%v)", second, err)
+	}
+	tv.mu.Lock()
+	actions, uri := strings.Join(tv.Actions[firstAction:], ","), tv.URI
+	tv.mu.Unlock()
+	if !strings.Contains(actions, "SetAVTransportURI,Stop,SetAVTransportURI,Play") || uri == oldURI || uri == oldNext {
+		t.Fatalf("expected an automatic stop and fresh URI after 701, got %s, %s", actions, uri)
+	}
+	if castHTTPStatus(t, uri) != 200 || castHTTPStatus(t, oldURI) != 404 || castHTTPStatus(t, oldNext) != 404 {
+		t.Fatal("the replacement must revoke the previous video and queued grant")
+	}
+}
+
+func TestCastRejectedReplacementKeepsPreviousSession(t *testing.T) {
+	a, _, tv, device := castSeriesFixture(t, false)
+	first := queueStart(t, a, tv, device)
+	tv.mu.Lock()
+	oldURI := tv.URI
+	tv.Faults = map[string]string{"SetAVTransportURI": "714"}
+	tv.mu.Unlock()
+	if _, err := a.startCast(context.Background(), device.ID, "cast-2", nil); err == nil {
+		t.Fatal("expected the TV to reject the replacement")
+	}
+	snapshot, err := a.castControl(context.Background(), first.ID, "pause", 0)
+	if err != nil || snapshot.FileID != "cast-1" || snapshot.Status != "PAUSED_PLAYBACK" || castHTTPStatus(t, oldURI) != 200 {
+		t.Fatalf("the previous video should still be controllable: %+v (%v)", snapshot, err)
+	}
+}
+
 func TestCastStopRevokesPreparedGrantEvenWhenQueueCannotClear(t *testing.T) {
 	a, _, tv, device := castSeriesFixture(t, true)
 	s := queueStart(t, a, tv, device)

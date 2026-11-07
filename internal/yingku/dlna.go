@@ -38,6 +38,8 @@ type DLNADevice struct {
 
 type DLNADiscoverer func(context.Context) ([]DLNADevice, error)
 
+var errDLNATransition = errors.New("电视当前无法执行操作，请先停止原来的播放")
+
 type CastSession struct {
 	ID                  string       `json:"id"`
 	DeviceID            string       `json:"deviceId"`
@@ -359,7 +361,10 @@ func soap(ctx context.Context, d DLNADevice, rendering bool, action string, args
 		values[k] = strings.TrimSpace(v)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 || values["errorCode"] != "" {
-		message := map[string]string{"401": "电视不支持此项控制", "701": "电视当前无法执行操作，请先停止原来的播放", "710": "电视不支持这种拖动进度方式", "711": "电视无法跳转到此位置", "714": "电视不支持当前视频格式", "716": "电视无法读取视频，请检查网络连接及视频格式"}
+		if values["errorCode"] == "701" {
+			return nil, errDLNATransition
+		}
+		message := map[string]string{"401": "电视不支持此项控制", "710": "电视不支持这种拖动进度方式", "711": "电视无法跳转到此位置", "714": "电视不支持当前视频格式", "716": "电视无法读取视频，请检查网络连接及视频格式"}
 		if m := message[values["errorCode"]]; m != "" {
 			return nil, errors.New(m)
 		}
@@ -477,10 +482,20 @@ func (a *App) startCastWithAutoNext(ctx context.Context, deviceID, fileID string
 	metadata := castMetadata(file, address)
 	a.mu.Lock()
 	var replaced []*CastSession
-	for _, old := range a.casts {
+	var playing *CastSession
+	for id, old := range a.casts {
 		if old.DeviceID == device.ID {
 			replaced = append(replaced, old)
+			if !old.ended && old.Status != "STOPPED" && old.Status != "NO_MEDIA_PRESENT" {
+				playing = old
+			}
+		} else if time.Since(old.Created) > 24*time.Hour || old.Status == "STOPPED" {
+			delete(a.casts, id)
 		}
+	}
+	if len(a.casts)-len(replaced) >= 16 {
+		a.mu.Unlock()
+		return CastSession{}, errors.New("同时投屏的设备过多，请先停止已有投屏")
 	}
 	a.mu.Unlock()
 	for _, old := range replaced {
@@ -492,19 +507,30 @@ func (a *App) startCastWithAutoNext(ctx context.Context, deviceID, fileID string
 	if a.casts == nil {
 		a.casts = map[string]*CastSession{}
 	}
-	for id, old := range a.casts {
-		if time.Since(old.Created) > 24*time.Hour || old.DeviceID == device.ID || old.Status == "STOPPED" {
-			delete(a.casts, id)
-		}
-	}
-	if len(a.casts) >= 16 {
-		a.mu.Unlock()
-		return CastSession{}, errors.New("同时投屏的设备过多，请先停止已有投屏")
-	}
 	a.casts[s.ID] = s
 	a.mu.Unlock()
-	_, err = soap(ctx, device, false, "SetAVTransportURI", [][2]string{{"CurrentURI", address}, {"CurrentURIMetaData", metadata}})
+	uriArgs := [][2]string{{"CurrentURI", address}, {"CurrentURIMetaData", metadata}}
+	_, err = soap(ctx, device, false, "SetAVTransportURI", uriArgs)
+	if errors.Is(err, errDLNATransition) && playing != nil {
+		// Some TVs accept a new URI only after stopping the current video.
+		if _, err = soap(ctx, device, false, "Stop", nil); err == nil {
+			a.mu.Lock()
+			a.saveCastProgressLocked(playing)
+			playing.Status, playing.ended, playing.token = "STOPPED", true, ""
+			a.mu.Unlock()
+			_, err = soap(ctx, device, false, "SetAVTransportURI", uriArgs)
+		}
+	}
 	if err == nil {
+		// A rejected URI leaves the previous session available to its controller.
+		a.mu.Lock()
+		for _, old := range replaced {
+			if !old.ended {
+				a.saveCastProgressLocked(old)
+			}
+			delete(a.casts, old.ID)
+		}
+		a.mu.Unlock()
 		_, err = soap(ctx, device, false, "Play", [][2]string{{"Speed", "1"}})
 	}
 	if err != nil {

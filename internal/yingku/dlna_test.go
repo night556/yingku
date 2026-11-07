@@ -30,6 +30,7 @@ type mockTV struct {
 	NextMetadata string
 	SupportsNext bool
 	ResetOnSet   bool
+	RequireStop  bool
 	Duration     string
 	Faults       map[string]string
 }
@@ -75,6 +76,9 @@ func tvFixture(t *testing.T) (*httptest.Server, *mockTV) {
 		}
 		if action == "SetNextAVTransportURI" && envelope.Body.Action.NextURI == "" && tv.Faults["ClearNext"] != "" {
 			fault = tv.Faults["ClearNext"]
+		}
+		if action == "SetAVTransportURI" && fault == "" && tv.RequireStop && tv.URI != "" && tv.Status != "STOPPED" {
+			fault = "701"
 		}
 		if fault != "" {
 			w.WriteHeader(500)

@@ -45,7 +45,6 @@ export function createCaster({api,toast,esc,icon,getState,getPlayerPosition,awai
   }
   function showRemote(){
     if(!current)return;
-    selectedFile=current.fileId;
     close({restoreFocus:false});navigateRemote();
   }
   function renderPage(root) {
@@ -55,22 +54,20 @@ export function createCaster({api,toast,esc,icon,getState,getPlayerPosition,awai
   }
   function updateRemote(){
     const root=document.querySelector('#cast-remote');
-    if(root&&!interacting&&!busy){
-      selectedFile=current.fileId;
+    if(root&&current&&!interacting&&!busy){
       const focusID=root.contains(document.activeElement)?document.activeElement.id:'';
       root.outerHTML=remoteHTML();
       if(focusID)document.getElementById(focusID)?.focus({preventScroll:true});
       const slider=document.querySelector('#cast-volume');if(slider)slider.value=volume;
     }
-    if(!root&&document.querySelector('#cast-page'))renderPage(document.querySelector('#main'));
+    if((!root||!current)&&document.querySelector('#cast-page'))renderPage(document.querySelector('#main'));
     dockUpdate();
   }
   async function open(fileID,force=false){
     selectedFile=fileID||current?.fileId||'';
     if(!selectedFile)return;
     const mine=++serial;
-    const sameSeries=current?.series&&getState().files.some(file=>file.id===selectedFile&&file.itemId===current.itemId);
-    if(!force&&(current?.fileId===selectedFile||sameSeries)&&!['STOPPED','NO_MEDIA_PRESENT'].includes(current.status)){showRemote();return;}
+    if(!force&&current?.fileId===selectedFile&&!['STOPPED','NO_MEDIA_PRESENT'].includes(current.status)){showRemote();return;}
     panel('投屏到电视','手机、运行映库的电脑与电视需在同一局域网。',
       '<div id="cast-devices"><p class="section-note">正在检查局域网设置…</p></div>',
       `<button class="button quiet" data-cast="close">${document.querySelector('#player-video')?'返回播放器':'返回'}</button>`);
@@ -107,7 +104,7 @@ export function createCaster({api,toast,esc,icon,getState,getPlayerPosition,awai
     if(action==='close'){close();return;}
     if(action==='return'){returnFromRemote();return;}
     if(action==='remote'){await open(current?.fileId);return;}
-    if(action==='devices'){await open(selectedFile,true);return;}
+    if(action==='devices'){await open(current?.fileId,true);return;}
     if(action==='rescan'){await discover();return;}
     if(busy)return;
     ++commandSerial;busy=true;button.disabled=true;
@@ -159,7 +156,7 @@ export function createCaster({api,toast,esc,icon,getState,getPlayerPosition,awai
         updateRemote();
       }
     }catch(error){
-      if(mine===commandSerial&&!busy&&error.message.includes('投屏已结束')){current=null;sessionStorage.removeItem('yingku_cast_id');dockUpdate();}
+      if(mine===commandSerial&&!busy&&error.message.includes('投屏已结束')){current=null;sessionStorage.removeItem('yingku_cast_id');updateRemote();}
     }finally{setTimeout(poll,4000);}
   }
   poll();
