@@ -86,6 +86,53 @@ func TestPlaybackOwnershipProtectsTVProgressAndAllowsWebContinuation(t *testing.
 	}
 }
 
+func TestWebPlaybackKeepsNewestCheckpointAcrossTabs(t *testing.T) {
+	a, server, _, _ := castingFixture(t)
+	const playback = "/api/files/cast-file/playback"
+	const progress = "/api/files/cast-file/progress"
+	claim := func() (string, float64) {
+		result := request(t, server, a, "POST", playback, map[string]any{}, 200)
+		var token string
+		var position float64
+		json.Unmarshal(result["token"], &token)
+		json.Unmarshal(result["position"], &position)
+		if token == "" {
+			t.Fatal("missing playback token")
+		}
+		return token, position
+	}
+	save := func(token string, sequence int, position int) map[string]json.RawMessage {
+		return request(t, server, a, "POST", progress, map[string]any{
+			"token": token, "sequence": sequence, "position": position, "duration": 600,
+		}, 200)
+	}
+
+	first, _ := claim()
+	save(first, 1, 100)
+	// The tab's exit save arrives before an older periodic save. The user has
+	// also sought backward, so the timestamp alone cannot decide which to keep.
+	save(first, 3, 65)
+	if result := save(first, 2, 120); string(result["stale"]) != "true" {
+		t.Fatal("delayed checkpoint was accepted", result)
+	}
+	second, resume := claim()
+	if second == first || resume != 65 {
+		t.Fatal("second tab did not receive the newest checkpoint", resume)
+	}
+
+	restored := request(t, server, a, "POST", playback, map[string]any{"activityOnly": true}, 200)
+	if len(restored["activityToken"]) <= 2 || restored["token"] != nil {
+		t.Fatal("restoring activity must not claim progress", restored)
+	}
+	save(second, 1, 75)
+	if result := save(first, 4, 130); string(result["ignored"]) != "true" {
+		t.Fatal("old tab still owns progress", result)
+	}
+	if file, _ := a.file("cast-file"); file.Position != 75 {
+		t.Fatal("new tab could not save progress", file.Position)
+	}
+}
+
 func TestCastSwitchProtectsBothOldAndNewEpisodes(t *testing.T) {
 	a, server, tv, device := castSeriesFixture(t, true)
 	old := request(t, server, a, "POST", "/api/files/cast-2/playback", map[string]any{}, 200)

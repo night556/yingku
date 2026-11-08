@@ -61,6 +61,7 @@ func (a *App) claimProgressLocked(fileID string) (string, error) {
 		}
 		before := *file
 		file.ProgressToken = uid()
+		file.ProgressSeq = 0
 		file.LastPlayed = time.Now().UTC().Format(time.RFC3339Nano)
 		if err := a.saveLocked(); err != nil {
 			*file = before
@@ -86,6 +87,7 @@ func (a *App) playbackRoutes(mux *http.ServeMux) {
 		var body struct {
 			Token         string `json:"token"`
 			TrackActivity bool   `json:"trackActivity"`
+			ActivityOnly  bool   `json:"activityOnly"`
 		}
 		if err := readJSON(w, r, &body); err != nil {
 			fail(w, err)
@@ -109,6 +111,10 @@ func (a *App) playbackRoutes(mux *http.ServeMux) {
 		defer a.mu.Unlock()
 		for _, live := range a.s.Files {
 			if live.ID == f.ID && live.Destination == f.Destination && live.Status == "completed" {
+				if body.ActivityOnly {
+					jsonResponse(w, 200, map[string]string{"activityToken": a.registerWebPlaybackLocked(f.ID)})
+					return
+				}
 				token := live.ProgressToken
 				if token == "" || body.Token != token {
 					var e error

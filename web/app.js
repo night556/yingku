@@ -3,7 +3,7 @@ import {createSourceMigration} from './source-migration.js';
 import {createScanner,aiSettingsPanel} from './scan.js';
 import {createCaster} from './casting.js';
 import {mountNetworkPanel} from './network.js';
-import {createCinema,readMediaRoute,itemLink,libraryLink,episodeNeighbors,fileUnavailable,castResumeTarget} from './cinema.js';
+import {createCinema,readMediaRoute,itemLink,libraryLink,episodeNeighbors,fileUnavailable,hasResumePosition,castResumeTarget} from './cinema.js';
 import {mountPlayerControls,playbackTime} from './player.js';
 import {mountSkipSegments,skipEditorMarkup} from './player-skip.js';
 import {createTaskPage} from './tasks.js';
@@ -58,7 +58,7 @@ let libraryFilter=initialRoute.filter||'all',libraryQuery=initialRoute.query||''
 let sourceID = '', sourcePath = '/', entries = [], selected = new Set(), sourceError = '', sourceBusy = false, browseSerial = 0;
 let draft = null, preview = null, previewDirty = false, searchResults = [], sourceEditing = null, matchItemID = '';
 let sourceMigration = null;
-let modalReturn = null, detailSeason = null, detailItemID = '', playerFileID = '', progressAt = 0;
+let modalReturn = null, detailSeason = null, detailItemID = '', playerFileID = '', progressAt = 0, progressSequence = 0;
 let libraryRemoval = null;
 let episodeSwitchBusy=false;
 let suspendedCastPlayer=null,castReturnURL='#library';
@@ -78,8 +78,8 @@ function metaBadge(s) { return badge(metaLabels[s] || s, s === 'ready' ? 'green'
 function art(path, wide = false) { return `/api/art?path=${encodeURIComponent(path)}${wide ? '&wide=1' : ''}`; }
 function toast(message, error = false) { const el = document.createElement('div'); el.className = `toast${error ? ' error' : ''}`; el.textContent = message; $('#toast-root').append(el); setTimeout(() => el.remove(), error ? 6500 : 3800); }
 function notifyFileDeleteWarning(message){const warning=document.createElement('div');warning.className='toast error deletion-warning';warning.setAttribute('role','alert');warning.innerHTML=`<span>${esc(message)}</span><button class="button small" type="button">知道了</button>`;warning.querySelector('button').addEventListener('click',()=>warning.remove());$('#toast-root').append(warning);}
-async function api(path, data, method = data === undefined ? 'GET' : 'POST', signal) {
-  const options = { method, headers: {}, signal };
+async function api(path, data, method = data === undefined ? 'GET' : 'POST', {signal, keepalive} = {}) {
+  const options = { method, headers: {}, signal, keepalive };
   if (method !== 'GET') options.headers['X-App-Token'] = state?.csrf || '';
   if (data !== undefined) { options.headers['Content-Type'] = 'application/json'; options.body = JSON.stringify(data); }
   let response;
@@ -418,7 +418,7 @@ async function checkFile(id){
   if(id){const result=await api(`/files/${id}/availability?refresh=1`);const file=state.files.find(f=>f.id===id);if(file)file.availability=result;await refresh();const message=result.status==='available'?'文件可以正常读取':result.message;const box=$('#file-location-error');if(box)box.textContent=message;else toast(message,result.status!=='available');}
   else{await api('/files/check',{});toast('已开始后台检查，失效文件会在影视墙和作品页标记。');}
 }
-function stopPlayer() { const video = $('#player-video'); if (video && playerFileID) saveProgress(video, playerFileID); playerAbort?.abort(); playerAbort = null; if (video) { video.pause(); video.removeAttribute('src'); video.load(); } playerFileID = ''; }
+function stopPlayer() { const video = $('#player-video'); if (video && playerFileID) saveProgress(video, playerFileID, {keepalive: true}); playerAbort?.abort(); playerAbort = null; if (video) { video.pause(); video.removeAttribute('src'); video.load(); } playerFileID = ''; }
 function navigateCastPage() {
   if(page==='cast'){caster.renderPage($('#main'));return;}
   castReturnURL=location.hash||'#library';try{sessionStorage.setItem('yingku_cast_return',castReturnURL);}catch{}
@@ -449,10 +449,21 @@ async function finishCastNavigation(restore) {
     playFile(target.file.id,null,{autoplay:false,resumePosition:target.position});
   }catch(error){toast('暂时无法同步投屏进度：'+error.message+'。请从媒体库重新打开。',true);}
 }
-function saveProgress(video,id){
+function saveProgress(video,id,{keepalive=false}={}){
   if(!video.isConnected||$('#player-video')!==video||playerFileID!==id||!video.dataset.progressToken||!Number.isFinite(video.currentTime)||video.currentTime<0||video.readyState<1)return;
-  const value={position:video.currentTime,duration:Number.isFinite(video.duration)?video.duration:0,token:video.dataset.progressToken};
-  progressPromise=progressPromise.then(()=>api(`/files/${id}/progress`,value)).then(result=>{if(result.ignored){if(video.dataset.progressToken===value.token)delete video.dataset.progressToken;return;}const f=state.files.find(f=>f.id===id);if(f){f.position=value.position;f.duration=value.duration;}}).catch(()=>{});
+  const value={position:video.currentTime,duration:Number.isFinite(video.duration)?video.duration:0,token:video.dataset.progressToken,sequence:++progressSequence};
+  const send=async()=>{
+    try{
+      const result=await api(`/files/${id}/progress`,value,'POST',{keepalive});
+      if(video.dataset.progressToken!==value.token)return;
+      if(result.ignored){delete video.dataset.progressToken;return;}
+      if(result.stale||value.sequence!==progressSequence)return;
+      const file=state.files.find(file=>file.id===id);
+      if(file){file.position=value.position;file.duration=value.duration;}
+    }catch{}
+  };
+  // Start the final request before the page freezes, even if another save is pending.
+  progressPromise=keepalive?Promise.all([progressPromise,send()]):progressPromise.then(send);
 }
 function updatePlayerNavigation() {
   const root=$('#player-episode-nav');if(!root||!playerFileID)return;
@@ -486,8 +497,7 @@ function playFile(id,reuseVideo=null,{autoplay=true,resumePosition=null}={}) {
   if(fileUnavailable(f)){showFileRecovery(id);return;}
   const isTS = /\.ts$/i.test(f.destination);
   const canShareMarkers = it.type === 'tv' && f.season > 0 && f.episode > 0 && !(f.episodeEnd > f.episode);
-  const hasResume = f.position > 5 && (!f.duration || f.position < f.duration - 15);
-  let resumeAt=resumePosition!==null?resumePosition:hasResume?f.position:0,claimPending=null,preserveRequested=false;
+  let resumeAt=resumePosition??(hasResumePosition(f)?f.position:0),claimPending=null,preserveRequested=false,progressStarted=false;
   const originalQuality=f.videoWidth>0&&f.videoHeight>0?`原画 · ${f.videoWidth} × ${f.videoHeight}`:'原画 · 读取分辨率中…';
   modal(esc(it.title), `${it.type === 'tv' ? `第 ${f.season} 季 · 第 ${f.episode} 集 · ` : ''}${esc(f.name)}`, `<div class="player-stage" tabindex="0" aria-label="视频播放区域">
     <video id="player-video" playsinline preload="metadata" src="/api/files/${id}/stream">${f.subtitles.map((s, i) => `<track kind="subtitles" src="/api/files/${id}/subtitles/${i}" label="${esc(s.name)}" srclang="zh" ${i === 0 ? 'default' : ''}>`).join('')}</video>
@@ -553,23 +563,47 @@ function playFile(id,reuseVideo=null,{autoplay=true,resumePosition=null}={}) {
     clearInterval(activityTimer);
     releaseActivity();
   }, {once: true});
-  window.addEventListener('pagehide', () => releaseActivity(), options);
+  const saveOnExit = () => saveProgress(video, id, {keepalive: true});
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) saveOnExit();
+  }, options);
+  window.addEventListener('pagehide', () => {
+    saveOnExit();
+    releaseActivity();
+  }, options);
   window.addEventListener('pageshow', event => {
-    if (event.persisted && video.isConnected && !video.paused) claimPlayback(true).catch(() => {});
+    if (!event.persisted || !video.isConnected || video.paused || activityToken || claimPending) return;
+    api(`/files/${id}/playback`, {activityOnly: true}).then(result => {
+      if (playerSignal.aborted || !video.isConnected || activityToken) releaseActivity(result.activityToken);
+      else activityToken = result.activityToken;
+    }).catch(() => {});
   }, options);
   function applyResume(){if(video.readyState>=1&&Number.isFinite(resumeAt))video.currentTime=Math.max(0,Math.min(resumeAt,Number.isFinite(video.duration)?video.duration:resumeAt));}
   async function claimPlayback(preservePosition=false){
     if(preservePosition)preserveRequested=true;
     if(claimPending)return claimPending;
-    const previousToken=video.dataset.progressToken||'';
     claimPending=(async()=>{
+      await progressPromise;
+      if(playerSignal.aborted||!video.isConnected)throw new Error('播放器已关闭');
+      const previousToken=video.dataset.progressToken||'';
       const result=await api(`/files/${id}/playback`,{token:previousToken,trackActivity:true});
-      if(playerSignal.aborted||$('#player-video')!==video){releaseActivity(result.activityToken);throw new Error('播放器已关闭');}
+      if(playerSignal.aborted||!video.isConnected||$('#player-video')!==video){releaseActivity(result.activityToken);throw new Error('播放器已关闭');}
       releaseActivity();
       activityToken = result.activityToken || '';
-      const keepPosition=preserveRequested||resumePosition!==null&&!previousToken||previousToken&&previousToken===result.token;
-      resumeAt=keepPosition?video.currentTime:result.position>5&&(!result.duration||result.position<result.duration-15)?result.position:resumePosition!==null?result.position:0;
-      if(!keepPosition)applyResume();video.dataset.progressToken=result.token;
+      const keepPosition = preserveRequested || video.ended || previousToken === result.token || (!progressStarted && resumePosition !== null);
+      if (keepPosition) {
+        resumeAt = video.currentTime;
+      } else {
+        const latest = hasResumePosition(result) || resumePosition !== null ? result.position : 0;
+        if (progressStarted || resumeAt !== latest) {
+          resumeAt = latest;
+          applyResume();
+        }
+      }
+      if(previousToken!==result.token)progressSequence=0;
+      video.dataset.progressToken=result.token;
+      progressStarted=true;
+      if(video.paused)saveProgress(video,id);
     })().finally(()=>{claimPending=null;preserveRequested=false;});
     return claimPending;
   }
@@ -584,7 +618,7 @@ function playFile(id,reuseVideo=null,{autoplay=true,resumePosition=null}={}) {
   };
   video.addEventListener('loadedmetadata', () => { updateVideoInfo();applyResume(); }, options);
   video.addEventListener('resize',updateVideoInfo,options);
-  video.addEventListener('timeupdate', () => { if (Date.now() - progressAt > 5000) { progressAt = Date.now(); saveProgress(video, id); } }, options);
+  video.addEventListener('timeupdate', () => { if (video.dataset.progressToken && Date.now() - progressAt > 5000) { progressAt = Date.now(); saveProgress(video, id); } }, options);
   video.addEventListener('pause', () => {
     if (!video.error && compatibility !== 'preparing') wantPlay = false;
     saveProgress(video, id);
@@ -620,15 +654,14 @@ function playFile(id,reuseVideo=null,{autoplay=true,resumePosition=null}={}) {
     $('#player-notice').textContent = '';
     const endpoint = `/files/${id}/ts-playback`;
     try {
-      let result = await api(endpoint, undefined, 'POST', playerSignal);
+      let result = await api(endpoint, undefined, 'POST', {signal: playerSignal});
       while (result.status === 'preparing') {
         updateTSProgress(result);
         await new Promise(resolve => setTimeout(resolve, 1200));
         if (playerSignal.aborted) return;
-        result = await api(endpoint, undefined, 'GET', playerSignal);
+        result = await api(endpoint, undefined, 'GET', {signal: playerSignal});
       }
       if (result.status !== 'ready' || !result.key) throw new Error('无法取得 TS 播放缓存');
-      if (wantPlay && !video.dataset.progressToken && !root.closest('[inert]')) await claimPlayback();
       if (playerSignal.aborted) return;
       compatibility = 'ready';
       $('#player-quality').title = 'TS 兼容播放，仅更换封装';
@@ -640,7 +673,7 @@ function playFile(id,reuseVideo=null,{autoplay=true,resumePosition=null}={}) {
       prepareIndicator.hidden = true;
     }
     if (compatibility === 'ready' && wantPlay && !playerSignal.aborted && !root.closest('[inert]')) {
-      await video.play().catch(error => {
+      await requestPlay().catch(error => {
         if (!playerSignal.aborted && !video.error) $('#player-notice').textContent = error.name === 'NotAllowedError' ? '兼容视频已就绪，点击播放。' : '兼容视频暂时无法播放，请重试。';
       });
     }
@@ -649,15 +682,15 @@ function playFile(id,reuseVideo=null,{autoplay=true,resumePosition=null}={}) {
     wantPlay = true;
     if (compatibility === 'preparing') return;
     if (compatibility === 'failed') return prepareTSPlayback();
-    await claimPlayback();
-    if (playerSignal.aborted || compatibility === 'preparing') return;
     const source = video.src;
     try { await video.play(); }
     catch (error) {
       if (playerSignal.aborted || source !== video.src || compatibility === 'preparing') return;
       if (isTS && !compatibility && error.name === 'NotSupportedError') return prepareTSPlayback();
       if (!video.error) throw error;
+      return;
     }
+    if (!playerSignal.aborted && source === video.src && compatibility !== 'preparing') await claimPlayback();
   }
   video.addEventListener('error', () => {
     if (compatibility === 'preparing' || compatibility === 'failed') return;
@@ -675,7 +708,9 @@ function playFile(id,reuseVideo=null,{autoplay=true,resumePosition=null}={}) {
     }).catch(error => { if (!playerSignal.aborted) toast(error.message, true); });
   };
   const {canAutoSkip} = mountPlayerControls({root,video,signal:playerSignal,icon,requestPlay,onSeek,getNextEpisode:()=>episodeNeighbors(state,id)?.next,onNextEpisode:stepEpisode});
-  mountSkipSegments({root, video, signal: playerSignal, segments: f, canAutoSkip, onSeek,
+  mountSkipSegments({root, video, signal: playerSignal, segments: f,
+    canAutoSkip: () => progressStarted && canAutoSkip(),
+    onSeek: automatic => automatic ? saveProgress(video, id) : onSeek(),
     seasonSegments: canShareMarkers ? it.skipSeasons?.[f.season] || {} : null,
     saveSegment: async (kind, scope, input) => {
       const endpoint = `/files/${id}/skip-segments/${kind}${scope === 'season' ? '?scope=season' : ''}`;
@@ -843,6 +878,5 @@ window.addEventListener('hashchange',()=>{
   }else window.scrollTo(0,0);
   $('#main').focus({preventScroll:true});
 });
-window.addEventListener('pagehide', () => { const video = $('#player-video'); if (video && playerFileID) saveProgress(video, playerFileID); });
 await refresh(true);
 setInterval(() => refresh(), 2000);

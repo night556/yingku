@@ -154,15 +154,15 @@ export function mountSkipSegments({root, video, signal, segments, seasonSegments
     if (active) skip.textContent = '跳过' + labels[active.name];
     return active;
   }
-  function jump(endTime) {
+  function jump(endTime, automatic = false) {
     video.currentTime = endTime;
     updateSkip();
-    onSeek();
+    onSeek(automatic);
   }
   function checkPlayback() {
     const active = updateSkip();
     if (autoSkip && active && !video.paused && !video.seeking && canAutoSkip() && active.end - video.currentTime > 0.001) {
-      jump(active.end);
+      jump(active.end, true);
     }
   }
   async function persist(input) {

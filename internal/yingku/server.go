@@ -197,6 +197,7 @@ func (a *App) handler() http.Handler {
 			Position float64 `json:"position"`
 			Duration float64 `json:"duration"`
 			Token    string  `json:"token"`
+			Sequence uint64  `json:"sequence"`
 		}
 		if err := readJSON(w, r, &body); err != nil {
 			fail(w, err)
@@ -210,16 +211,23 @@ func (a *App) handler() http.Handler {
 		defer a.mu.Unlock()
 		for i := range a.s.Files {
 			if a.s.Files[i].ID == r.PathValue("id") {
-				if a.s.Files[i].ProgressToken != "" && body.Token != a.s.Files[i].ProgressToken {
+				file := &a.s.Files[i]
+				if file.ProgressToken != "" && body.Token != file.ProgressToken {
 					jsonResponse(w, 200, map[string]any{"ok": true, "ignored": true})
 					return
 				}
-				before := a.s.Files[i]
-				a.s.Files[i].Position = body.Position
-				a.s.Files[i].Duration = body.Duration
-				a.s.Files[i].LastPlayed = time.Now().UTC().Format(time.RFC3339Nano)
+				// An exit checkpoint can reach the server ahead of a periodic save.
+				if file.ProgressSeq != 0 && body.Sequence <= file.ProgressSeq {
+					jsonResponse(w, 200, map[string]any{"ok": true, "stale": true})
+					return
+				}
+				before := *file
+				file.Position = body.Position
+				file.Duration = body.Duration
+				file.ProgressSeq = body.Sequence
+				file.LastPlayed = time.Now().UTC().Format(time.RFC3339Nano)
 				if err := a.saveLocked(); err != nil {
-					a.s.Files[i] = before
+					*file = before
 					fail(w, err)
 					return
 				}

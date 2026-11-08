@@ -123,6 +123,7 @@ type MediaFile struct {
 	Size           int64             `json:"size"`
 	Position       float64           `json:"position"`
 	ProgressToken  string            `json:"progressToken,omitempty"`
+	ProgressSeq    uint64            `json:"progressSequence,omitempty"`
 	LastPlayed     string            `json:"lastPlayed,omitempty"`
 	Availability   *FileAvailability `json:"availability,omitempty"`
 	Duration       float64           `json:"duration"`

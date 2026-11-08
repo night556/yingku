@@ -34,10 +34,12 @@ export function episodeNeighbors(state,fileID) {
 }
 
 export const fileUnavailable=file=>['missing','unreadable'].includes(file?.availability?.status);
+export const hasResumePosition=({position,duration})=>position>5&&(!duration||position<duration-15);
+const byLastPlayed=(a,b)=>(Date.parse(b.lastPlayed)||0)-(Date.parse(a.lastPlayed)||0);
 export function preferredPlaybackFile(files){
   const ready=files.filter(f=>f.status==='completed'&&!fileUnavailable(f));
-  const dated=ready.filter(f=>f.lastPlayed).sort((a,b)=>String(b.lastPlayed).localeCompare(String(a.lastPlayed)));
-  return dated[0]||ready.filter(f=>f.position>5&&(!f.duration||f.position<f.duration-15)).at(-1)||ready[0];
+  const recent=ready.filter(f=>f.lastPlayed).sort(byLastPlayed);
+  return recent.find(hasResumePosition)||ready.filter(hasResumePosition).at(-1)||recent[0]||ready[0];
 }
 export function castResumeTarget(state,originalID,cast){
   const original=state.files.find(f=>f.id===originalID),target=state.files.find(f=>f.id===cast?.fileId);
@@ -47,7 +49,7 @@ export function castResumeTarget(state,originalID,cast){
 
 export function createCinema({esc,icon,art,duration,bytes,detailInfo,detailPeople,sourceStatus,taskBadge}) {
   const filesFor=(state,id)=>state.files.filter(file=>file.itemId===id).sort((a,b)=>a.season-b.season||a.episode-b.episode);
-  const resumable=file=>file.status==='completed'&&!fileUnavailable(file)&&file.position>5&&(!file.duration||file.position<file.duration-15);
+  const resumable=file=>file.status==='completed'&&!fileUnavailable(file)&&hasResumePosition(file);
   const preferred=preferredPlaybackFile;
   const episodeNumber=file=>String(file.episode).padStart(2,'0')+(file.episodeEnd>file.episode?'–'+String(file.episodeEnd).padStart(2,'0'):'');
   const episodeLabel=file=>'第 '+file.season+' 季 · 第 '+episodeNumber(file)+' 集';
@@ -88,7 +90,9 @@ export function createCinema({esc,icon,art,duration,bytes,detailInfo,detailPeopl
       <p>${esc(first.overview||'收藏你的电影和剧集，在这里开始下一段故事。')}</p>
       <div class="cinema-actions">${file?`<button class="button primary" data-action="play" data-id="${esc(file.id)}">${icon('play')}${resumable(file)?'继续播放':'开始播放'}</button>`:''}<a class="button hero-details" href="${esc(itemLink(first.id))}">${icon('info')}查看详情</a></div>
       ${file&&resumable(file)?'<small class="feature-resume">'+(first.type==='tv'?episodeLabel(file)+' · ':'')+'已观看 '+duration(file.position)+'</small>':''}</div></section>`:'';
-    const continuing=state.items.map(item=>({item,file:preferred(filesFor(state,item.id))})).filter(entry=>entry.file&&resumable(entry.file)&&(filter==='all'||entry.item.type===filter)&&(!q||items.includes(entry.item))).slice(-8).reverse();
+    const continuing=state.items.map(item=>({item,file:preferred(filesFor(state,item.id))}))
+      .filter(entry=>entry.file&&resumable(entry.file)&&(filter==='all'||entry.item.type===filter)&&(!q||items.includes(entry.item)))
+      .reverse().sort((a,b)=>byLastPlayed(a.file,b.file)).slice(0,8);
     const resume=continuing.length?`<section class="continue-collection"><h2>继续观看<span>接着上次的进度</span></h2><div class="continue-rail">${continuing.map(({item,file})=>{
       const episode=(item.episodes||[]).find(ep=>ep.season===file.season&&ep.number===file.episode);
       return `<button class="resume-tile" data-action="play" data-id="${esc(file.id)}" aria-label="继续观看${esc(item.title)}"><div class="resume-image">${image(episode?.still||item.backdrop||item.poster)}<span class="resume-play">${icon('play')}</span><span class="resume-time">${duration(file.position)}${file.duration?' / '+duration(file.duration):''}</span><span class="wall-progress"><i style="width:${progress(file)}%"></i></span></div><strong>${esc(item.title)}</strong><small>${item.type==='tv'?episodeLabel(file):esc(item.year||'电影')}</small></button>`;
