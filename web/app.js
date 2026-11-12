@@ -651,7 +651,7 @@ function playFile(id,reuseVideo=null,{autoplay=true,resumePosition=null}={}) {
     updateTSProgress();
     prepareIndicator.hidden = false;
     $('#player-error').textContent = '';
-    $('#player-notice').textContent = '';
+    announce('');
     const endpoint = `/files/${id}/ts-playback`;
     try {
       let result = await api(endpoint, undefined, 'POST', {signal: playerSignal});
@@ -674,18 +674,19 @@ function playFile(id,reuseVideo=null,{autoplay=true,resumePosition=null}={}) {
     }
     if (compatibility === 'ready' && wantPlay && !playerSignal.aborted && !root.closest('[inert]')) {
       await requestPlay().catch(error => {
-        if (!playerSignal.aborted && !video.error) $('#player-notice').textContent = error.name === 'NotAllowedError' ? '兼容视频已就绪，点击播放。' : '兼容视频暂时无法播放，请重试。';
+        if (!playerSignal.aborted && !video.error) announce(error.name === 'NotAllowedError' ? '兼容视频已就绪，点击播放。' : '兼容视频暂时无法播放，请重试。');
       });
     }
   }
   async function requestPlay() {
+    if (playerSignal.aborted || !video.isConnected) return;
     wantPlay = true;
     if (compatibility === 'preparing') return;
     if (compatibility === 'failed') return prepareTSPlayback();
     const source = video.src;
     try { await video.play(); }
     catch (error) {
-      if (playerSignal.aborted || source !== video.src || compatibility === 'preparing') return;
+      if (playerSignal.aborted || !video.isConnected || source !== video.src || compatibility === 'preparing' || error.name === 'AbortError') return;
       if (isTS && !compatibility && error.name === 'NotSupportedError') return prepareTSPlayback();
       if (!video.error) throw error;
       return;
@@ -707,7 +708,7 @@ function playFile(id,reuseVideo=null,{autoplay=true,resumePosition=null}={}) {
       if (video.ended) releaseActivity();
     }).catch(error => { if (!playerSignal.aborted) toast(error.message, true); });
   };
-  const {canAutoSkip} = mountPlayerControls({root,video,signal:playerSignal,icon,requestPlay,onSeek,getNextEpisode:()=>episodeNeighbors(state,id)?.next,onNextEpisode:stepEpisode});
+  const {canAutoSkip,announce} = mountPlayerControls({root,video,signal:playerSignal,icon,requestPlay,onSeek,getNextEpisode:()=>episodeNeighbors(state,id)?.next,onNextEpisode:stepEpisode});
   mountSkipSegments({root, video, signal: playerSignal, segments: f,
     canAutoSkip: () => progressStarted && canAutoSkip(),
     onSeek: automatic => automatic ? saveProgress(video, id) : onSeek(),
@@ -733,7 +734,7 @@ function playFile(id,reuseVideo=null,{autoplay=true,resumePosition=null}={}) {
       return result;
     },
   });
-  if(autoplay)requestPlay().catch(error=>{if(!playerSignal.aborted)$('#player-notice').textContent=error.message||'视频已就绪，点击播放继续。';});
+  if(autoplay)requestPlay().catch(error=>{if(!playerSignal.aborted)announce(error.message||'视频已就绪，点击播放继续。');});
 }
 function uploadSubtitle(id) {
   const input = document.createElement('input'); input.type = 'file'; input.accept = '.srt,.vtt';

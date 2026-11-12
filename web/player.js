@@ -33,7 +33,16 @@ export function mountPlayerControls({root,video,signal,icon,onSeek,getNextEpisod
   let noticeTimer,nextTimer,seeking=false,dragging=false,waiting=false,gestures,keyboard,nextID='';
   const listen=(target,event,callback)=>target.addEventListener(event,callback,{signal});
   const isFullscreen=()=>document.fullscreenElement===fullscreenRoot||document.webkitFullscreenElement===fullscreenRoot;
-  const announce=message=>{const notice=$('#player-notice');notice.textContent=message;clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>{notice.textContent='';},3500);};
+  function clearNotice() {
+    clearTimeout(noticeTimer);
+    $('#player-notice').textContent='';
+  }
+  function announce(message) {
+    clearNotice();
+    if(!message)return;
+    $('#player-notice').textContent=message;
+    noticeTimer=setTimeout(clearNotice,3500);
+  }
   function layoutCaptions() {
     const height=video.clientHeight;if(!height)return;
     const reserve=root.classList.contains('controls-hidden')?24:$('.player-controls').offsetHeight+20;
@@ -97,7 +106,7 @@ export function mountPlayerControls({root,video,signal,icon,onSeek,getNextEpisod
     waiting=value;$('#player-buffering').hidden=!value;showControls();
   }
   async function togglePlay() {
-    if(video.paused||video.ended){try{await requestPlay();}catch(error){if(!signal.aborted)announce(error.message||'暂时无法播放，请重试或检查视频格式。');}}
+    if(video.paused||video.ended){try{await requestPlay();}catch(error){if(!signal.aborted&&error.name!=='AbortError')announce(error.message||'暂时无法播放，请重试或检查视频格式。');}}
     else video.pause();
   }
   async function toggleFullscreen() {
@@ -198,7 +207,7 @@ export function mountPlayerControls({root,video,signal,icon,onSeek,getNextEpisod
   listen(video,'loadedmetadata',()=>{updateClock();updateSubtitles();});
   listen(video,'volumechange',updateVolume);
   listen(video,'waiting',()=>{if(!video.paused)setWaiting(true);});
-  listen(video,'playing',()=>setWaiting(false));
+  listen(video,'playing',()=>{clearNotice();setWaiting(false);});
   listen(video,'canplay',()=>setWaiting(false));
   listen(video,'error',()=>setWaiting(false));
   listen(video.textTracks,'addtrack',updateSubtitles);
@@ -212,5 +221,5 @@ export function mountPlayerControls({root,video,signal,icon,onSeek,getNextEpisod
   rate.value=String(preferences.rate);video.playbackRate=preferences.rate;
   try{video.volume=preferences.volume;}catch{}video.muted=preferences.muted;
   updatePlay();updateVolume();updateBrightness();updateClock();updateSubtitles();updateFullscreen();
-  return {canAutoSkip:()=>menu.hidden&&!seeking&&!dragging&&!gestures.active()&&!root.closest('[inert]')};
+  return {announce,canAutoSkip:()=>menu.hidden&&!seeking&&!dragging&&!gestures.active()&&!root.closest('[inert]')};
 }
